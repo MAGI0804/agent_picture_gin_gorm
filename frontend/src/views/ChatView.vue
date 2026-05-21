@@ -256,10 +256,12 @@ const activeModelOptions = computed<GlobalModelConfig[]>(() => {
   return taskType.value === 'text_chat' ? selection.text_models : selection.image_models
 })
 const currentModelId = computed(() => {
-  const selection = modelSelection.value
-  if (!selection) return 0
-  return taskType.value === 'text_chat' ? selection.text_model_config_id : selection.image_model_config_id
+	const selection = modelSelection.value
+	if (!selection) return 0
+	return taskType.value === 'text_chat' ? selection.text_model_config_id : selection.image_model_config_id
 })
+const selectedTextModelId = computed(() => modelSelection.value?.text_model_config_id || 0)
+const selectedImageModelId = computed(() => modelSelection.value?.image_model_config_id || 0)
 
 onMounted(async () => {
   await loadModelSelection()
@@ -351,6 +353,8 @@ async function sendNormal() {
         input_type: 'normal',
         task_type: taskType.value,
         content,
+        text_model_config_id: selectedTextModelId.value,
+        image_model_config_id: taskType.value === 'image_generation' ? selectedImageModelId.value : 0,
         stream: true,
         return_reasoning: true
       })
@@ -380,6 +384,8 @@ async function sendAnswer() {
         input_type: 'answer_to_questions',
         task_type: 'image_generation',
         content,
+        text_model_config_id: selectedTextModelId.value,
+        image_model_config_id: selectedImageModelId.value,
         answered_question_ids: answeredQuestionIds,
         stream: true,
         return_reasoning: true
@@ -414,19 +420,15 @@ async function applySendResponse(data: SendMessageResponse) {
 }
 
 async function saveComposerModelSelection(event: Event) {
-  const target = event.target as HTMLSelectElement
-  const selectedId = Number(target.value)
-  const selection = modelSelection.value
-  if (!selection) return
-  const nextTextModelId = taskType.value === 'text_chat' ? selectedId : selection.text_model_config_id
-  const nextImageModelId = taskType.value === 'image_generation' ? selectedId : selection.image_model_config_id
-  modelSelection.value = await apiFetch<ModelSelection>('/api/settings/model-selection', {
-    method: 'PUT',
-    body: JSON.stringify({
-      text_model_config_id: nextTextModelId,
-      image_model_config_id: nextImageModelId
-    })
-  })
+	const target = event.target as HTMLSelectElement
+	const selectedId = Number(target.value)
+	const selection = modelSelection.value
+	if (!selection) return
+	modelSelection.value = {
+		...selection,
+		text_model_config_id: taskType.value === 'text_chat' ? selectedId : selection.text_model_config_id,
+		image_model_config_id: taskType.value === 'image_generation' ? selectedId : selection.image_model_config_id
+	}
 }
 
 async function loadRunEvents() {

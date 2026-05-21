@@ -12,6 +12,7 @@ import (
 func registerAgentRoutes(api *gin.RouterGroup) {
 	agentCtrl := new(agent_ctrl.AgentController)
 	modelConfigCtrl := new(agent_ctrl.ModelConfigController)
+	permissionCtrl := new(agent_ctrl.ModelPermissionController)
 	agentGroup := api.Group("")
 	agentGroup.Use(middleware.AuthJWT())
 	{
@@ -45,5 +46,12 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		agentGroup.POST("/model-configs", modelConfigCtrl.CreateModelConfig)           // POST /api/model-configs - 创建新的模型配置
 		agentGroup.PUT("/model-configs/:id", modelConfigCtrl.UpdateModelConfig)        // PUT /api/model-configs/:id - 更新模型配置
 		agentGroup.DELETE("/model-configs/:id", modelConfigCtrl.DeleteModelConfig)     // DELETE /api/model-configs/:id - 删除模型配置
+
+		// 模型权限管理路由
+		agentGroup.GET("/permissions/model-permissions", permissionCtrl.GetUserModelPermissions)            // GET /api/permissions/model-permissions - 获取当前用户对所有模型的权限列表
+		agentGroup.GET("/permissions/available-models", permissionCtrl.GetUserAvailableModels)              // GET /api/permissions/available-models - 获取当前用户可用的模型列表
+		agentGroup.GET("/permissions/check/model/:model_id", permissionCtrl.CheckModelPermission)           // GET /api/permissions/check/model/:model_id - 检查当前用户是否有权限使用指定模型
+		agentGroup.POST("/permissions/user-model-permission", permissionCtrl.SetUserModelPermission)        // POST /api/permissions/user-model-permission - 设置指定用户对指定模型的权限
+		agentGroup.POST("/permissions/user-model-permissions", permissionCtrl.BatchSetUserModelPermissions) // POST /api/permissions/user-model-permissions - 批量设置指定用户对多个模型的权限
 	}
 }

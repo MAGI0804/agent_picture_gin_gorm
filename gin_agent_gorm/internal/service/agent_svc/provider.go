@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io/ioutil"
 	"net/http"
 	"strconv"
@@ -60,43 +59,30 @@ type Provider interface {
 	Generate(request GenerationRequest) ([]GeneratedFile, error)
 }
 
-type MockProvider struct {
-}
-
 type HTTPProvider struct {
 	config model.UserModelConfig
 	client *http.Client
 }
 
 func NewProvider() Provider {
-	return &MockProvider{}
+	return &HTTPProvider{
+		client: &http.Client{Timeout: 60 * time.Second},
+	}
 }
 
 func NewProviderWithConfig(config model.UserModelConfig) Provider {
-	provider := strings.ToLower(strings.TrimSpace(config.Provider))
-	if provider == "" || provider == "mock" {
-		return &MockProvider{}
-	}
 	return &HTTPProvider{
 		config: config,
 		client: &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-func (provider *MockProvider) Chat(request ChatRequest) (ChatResult, error) {
-	if len(request.Messages) == 0 {
-		return ChatResult{Content: "Mock provider is ready. Please send a message.", ReasoningContent: "Mock reasoning: 已开启 return_reasoning，用于前端展示思考摘要。"}, nil
-	}
-	last := strings.TrimSpace(request.Messages[len(request.Messages)-1].Content)
-	if last == "" {
-		return ChatResult{Content: "Mock provider received an empty message.", ReasoningContent: "Mock reasoning: 用户输入为空，直接返回提示。"}, nil
-	}
-	return ChatResult{Content: "Mock provider reply: " + last, ReasoningContent: "Mock reasoning: 已读取上下文、模型配置和用户最新问题，生成直接回复。"}, nil
-}
-
 func (provider *HTTPProvider) Chat(request ChatRequest) (ChatResult, error) {
 	providerName := strings.ToLower(strings.TrimSpace(provider.config.Provider))
 	baseURL := strings.TrimSpace(provider.config.BaseURL)
+	if providerName == "" || providerName == "mock" {
+		return ChatResult{}, errors.New("未配置真实文本模型，请在全局模型配置中选择 deepseek/openai/anthropic 等真实模型")
+	}
 	if isDeepseekChatProvider(providerName, baseURL) {
 		return provider.chatDeepseek(request, baseURL)
 	}
@@ -534,59 +520,6 @@ func truncateForError(value string, limit int) string {
 	return value[:limit] + "..."
 }
 
-func (provider *MockProvider) Generate(request GenerationRequest) ([]GeneratedFile, error) {
-	title := strings.TrimSpace(request.Prompt)
-	if title == "" {
-		title = "AI Agent Picture"
-	}
-	escaped := html.EscapeString(title)
-	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%%" stop-color="#172554"/>
-      <stop offset="55%%" stop-color="#0f766e"/>
-      <stop offset="100%%" stop-color="#f59e0b"/>
-    </linearGradient>
-  </defs>
-  <rect width="1280" height="720" fill="url(#bg)"/>
-  <circle cx="1060" cy="140" r="90" fill="#fde68a" opacity="0.9"/>
-  <rect x="110" y="140" width="520" height="360" rx="28" fill="#ffffff" opacity="0.15"/>
-  <text x="150" y="255" fill="#ffffff" font-size="54" font-family="Arial, sans-serif" font-weight="700">AI Agent Image</text>
-  <foreignObject x="150" y="300" width="900" height="260">
-    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,sans-serif;color:white;font-size:34px;line-height:1.35;">%s</div>
-  </foreignObject>
-</svg>`, escaped)
-
-	page := fmt.Sprintf(`<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AI Agent Artifact</title>
-  <style>
-    body { margin: 0; font-family: Arial, sans-serif; background: #f8fafc; color: #0f172a; }
-    main { min-height: 100vh; display: grid; place-items: center; padding: 48px; }
-    section { max-width: 840px; width: 100%%; border: 1px solid #cbd5e1; border-radius: 8px; background: white; padding: 32px; }
-    h1 { margin: 0 0 16px; font-size: 32px; }
-    p { font-size: 18px; line-height: 1.7; }
-  </style>
-</head>
-<body>
-  <main>
-    <section>
-      <h1>AI Agent HTML Artifact</h1>
-      <p>%s</p>
-    </section>
-  </main>
-</body>
-</html>`, escaped)
-
-	return []GeneratedFile{
-		{Name: "generated-image.svg", Kind: "image", MimeType: "image/svg+xml", Content: []byte(svg)},
-		{Name: "generated-page.html", Kind: "html", MimeType: "text/html; charset=utf-8", Content: []byte(page)},
-	}, nil
-}
-
 func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFile, error) {
 	providerName := strings.ToLower(strings.TrimSpace(provider.config.Provider))
 	modelName := strings.TrimSpace(provider.config.ImageModel)
@@ -596,14 +529,14 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 	}
 	baseURL := strings.TrimSpace(provider.config.BaseURL)
 	if modelName == "" || baseURL == "" {
-		return (&MockProvider{}).Generate(request)
+		return nil, errors.New("未配置真实图片模型名称或请求地址")
 	}
 
 	if isJimengProvider(providerName, baseURL) {
 		return provider.generateJimengImage(request, baseURL, modelName)
 	}
 	if apiKey == "" {
-		return (&MockProvider{}).Generate(request)
+		return nil, errors.New("未配置真实图片模型 API Key 或鉴权信息")
 	}
 	if isDashScopeProvider(providerName, baseURL) {
 		return provider.generateDashScopeImage(request, baseURL, apiKey, modelName)

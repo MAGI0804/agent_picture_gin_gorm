@@ -10,6 +10,8 @@ type SendMessageRequest struct {
 	InputType           string `json:"input_type" form:"input_type"`
 	TaskType            string `json:"task_type" form:"task_type"`
 	Content             string `json:"content" form:"content"`
+	TextModelConfigID   uint   `json:"text_model_config_id" form:"text_model_config_id"`
+	ImageModelConfigID  uint   `json:"image_model_config_id" form:"image_model_config_id"`
 	AnsweredQuestionIDs []uint `json:"answered_question_ids" form:"answered_question_ids"`
 	Attachments         []uint `json:"attachments" form:"attachments"`
 	Stream              bool   `json:"stream" form:"stream"`

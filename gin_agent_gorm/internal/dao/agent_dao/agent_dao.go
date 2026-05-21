@@ -3,6 +3,8 @@ package agent_dao
 import (
 	"gin-biz-web-api/model"
 	"gin-biz-web-api/pkg/database"
+
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -259,9 +261,9 @@ func (dao *AgentDAO) SaveUserModelSelection(
 		UserID:                     userID,
 		SelectedTextModelConfigID:  textModelConfigID,
 		SelectedImageModelConfigID: imageModelConfigID,
-		Provider:                   "mock",
-		ChatModel:                  "mock-text",
-		ImageModel:                 "mock-image",
+		Provider:                   "",
+		ChatModel:                  "",
+		ImageModel:                 "",
 		BaseURL:                    "",
 		APIKey:                     "",
 		Temperature:                "0.7",
@@ -274,4 +276,57 @@ func (dao *AgentDAO) SaveUserModelSelection(
 			"updated_at",
 		}),
 	}).Create(&config).Error
+}
+
+// ListPermittedModelConfigs returns global model configs the user is allowed to use.
+// If the user has no permission records, all models are permitted by default.
+func (dao *AgentDAO) ListPermittedModelConfigs(
+	userID uint,
+	isTextModel bool,
+	isImageModel bool,
+) ([]model.ModelConfig, error) {
+	var configs []model.ModelConfig
+	query := database.DB.Model(&model.ModelConfig{})
+
+	if isTextModel {
+		query = query.Where("model_configs.is_text_model = ?", true)
+	}
+	if isImageModel {
+		query = query.Where("model_configs.is_image_model = ?", true)
+	}
+
+	var hasPermissions bool
+	err := database.DB.Model(&model.UserModelPermission{}).
+		Where("user_id = ?", userID).
+		First(&model.UserModelPermission{}).Error
+	if err == nil {
+		hasPermissions = true
+	} else if err == gorm.ErrRecordNotFound {
+		hasPermissions = false
+	} else {
+		return nil, err
+	}
+
+	if hasPermissions {
+		query = query.
+			Joins("LEFT JOIN user_model_permissions ON user_model_permissions.model_config_id = model_configs.id AND user_model_permissions.user_id = ?", userID).
+			Where("user_model_permissions.id IS NULL OR user_model_permissions.can_use = ?", true)
+	}
+
+	err = query.Order("model_configs.id desc").Find(&configs).Error
+	return configs, err
+}
+
+// FindPermittedModelConfig returns one global model config if the user has permission.
+func (dao *AgentDAO) FindPermittedModelConfig(
+	userID uint,
+	modelConfigID uint,
+) (model.ModelConfig, error) {
+	var config model.ModelConfig
+	err := database.DB.Model(&model.ModelConfig{}).
+		Select("model_configs.*").
+		Joins("JOIN user_model_permissions ON user_model_permissions.model_config_id = model_configs.id").
+		Where("user_model_permissions.user_id = ? AND user_model_permissions.can_use = ? AND model_configs.id = ?", userID, true, modelConfigID).
+		First(&config).Error
+	return config, err
 }

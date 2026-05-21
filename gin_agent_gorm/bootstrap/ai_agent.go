@@ -24,10 +24,10 @@ func setupAIAgent() {
 		&model.Artifact{},
 		&model.ModelConfig{},
 		&model.UserModelConfig{},
+		&model.UserModelPermission{},
 	)
 	logger.LogErrorIf(err)
 	ensureAIAgentIndexes()
-	seedDefaultModelConfigs()
 }
 
 func ensureAIAgentIndexes() {
@@ -36,6 +36,9 @@ func ensureAIAgentIndexes() {
 		name  string
 	}{
 		{value: &model.UserModelConfig{}, name: "idx_user_model_configs_user_id"},
+		{value: &model.UserModelPermission{}, name: "idx_user_model_permissions_user_id"},
+		{value: &model.UserModelPermission{}, name: "idx_user_model_permissions_model_id"},
+		{value: &model.UserModelPermission{}, name: "idx_user_model_permissions_user_model"},
 		{value: &model.ModelConfig{}, name: "idx_model_configs_text"},
 		{value: &model.ModelConfig{}, name: "idx_model_configs_image"},
 	}
@@ -45,38 +48,4 @@ func ensureAIAgentIndexes() {
 		}
 		logger.LogErrorIf(database.DB.Migrator().CreateIndex(index.value, index.name))
 	}
-}
-
-func seedDefaultModelConfigs() {
-	var count int64
-	err := database.DB.Model(&model.ModelConfig{}).Count(&count).Error
-	if err != nil || count > 0 {
-		logger.LogErrorIf(err)
-		return
-	}
-
-	defaults := []model.ModelConfig{
-		{
-			ModelName:       "mock-text",
-			RequestURL:      "",
-			IsTextModel:     true,
-			IsImageModel:    false,
-			SupportThinking: true,
-			ConfigInfo: model.JSONMap{
-				"provider":    "mock",
-				"temperature": "0.7",
-			},
-		},
-		{
-			ModelName:       "mock-image",
-			RequestURL:      "",
-			IsTextModel:     false,
-			IsImageModel:    true,
-			SupportThinking: false,
-			ConfigInfo: model.JSONMap{
-				"provider": "mock",
-			},
-		},
-	}
-	logger.LogErrorIf(database.DB.Create(&defaults).Error)
 }

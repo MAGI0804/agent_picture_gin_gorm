@@ -2,6 +2,9 @@
 package middleware
 
 import (
+	"sync"
+	"time"
+
 	"gin-biz-web-api/constant"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +15,13 @@ import (
 	"gin-biz-web-api/pkg/jwt"
 	"gin-biz-web-api/pkg/responses"
 )
+
+type authUserCacheItem struct {
+	user      model.User
+	expiresAt time.Time
+}
+
+var authUserCache sync.Map
 
 func AuthJWT() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -28,10 +38,8 @@ func AuthJWT() gin.HandlerFunc {
 			return
 		}
 
-		// jwt 解析成功，设置用户信息
-		var user model.User
-		database.DB.First(&user, claims.UserID)
-		if user.ID == 0 {
+		user, ok := findAuthUser(claims.UserID)
+		if !ok {
 			response.ToErrorResponse(errcode.Unauthorized, "找不到对应用户")
 			c.Abort()
 			return
@@ -43,4 +51,26 @@ func AuthJWT() gin.HandlerFunc {
 
 		c.Next() // 继续执行后续中间件和处理函数
 	}
+}
+
+func findAuthUser(userID string) (model.User, bool) {
+	if cached, ok := authUserCache.Load(userID); ok {
+		item, _ := cached.(authUserCacheItem)
+		if time.Now().Before(item.expiresAt) && item.user.ID != 0 {
+			return item.user, true
+		}
+		authUserCache.Delete(userID)
+	}
+	var user model.User
+	err := database.DB.
+		Select("id", "account", "email", "phone", "nickname", "introduction", "avatar", "created_at", "updated_at").
+		First(&user, userID).Error
+	if err != nil || user.ID == 0 {
+		return user, false
+	}
+	authUserCache.Store(userID, authUserCacheItem{
+		user:      user,
+		expiresAt: time.Now().Add(2 * time.Minute),
+	})
+	return user, true
 }

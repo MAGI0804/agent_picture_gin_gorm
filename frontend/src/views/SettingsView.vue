@@ -111,17 +111,6 @@ async function loadSelection() {
 }
 
 async function saveSelection() {
-  const data = await apiFetch<ModelSelection>('/api/settings/model-selection', {
-    method: 'PUT',
-    body: JSON.stringify({
-      text_model_config_id: textModelConfigId.value,
-      image_model_config_id: imageModelConfigId.value
-    })
-  })
-  textModels.value = data.text_models || []
-  imageModels.value = data.image_models || []
-  textModelConfigId.value = data.text_model_config_id || 0
-  imageModelConfigId.value = data.image_model_config_id || 0
   settingsHint.value = '模型选择已保存'
 }
 
