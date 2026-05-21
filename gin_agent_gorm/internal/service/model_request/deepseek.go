@@ -13,6 +13,8 @@ import (
 	"gin-biz-web-api/model"
 )
 
+var deepseekHTTPClient = &http.Client{Timeout: 120 * time.Second}
+
 // DeepseekChatRequest Deepseek 模型聊天请求参数。
 type DeepseekChatRequest struct {
 	System          string            `json:"system"`
@@ -38,7 +40,7 @@ type DeepseekChatResult struct {
 }
 
 // SendDeepseekRequest 发送 Deepseek-v4-pro 模型请求。
-// 
+//
 // 参数:
 //   - url: Deepseek API 的基础地址
 //   - apiKey: API 密钥
@@ -110,8 +112,7 @@ func SendDeepseekRequest(url, apiKey, modelName string, request DeepseekChatRequ
 	httpRequest.Header.Set("Content-Type", "application/json")
 	httpRequest.Header.Set("Authorization", "Bearer "+apiKey)
 
-	client := &http.Client{Timeout: 120 * time.Second}
-	response, err := client.Do(httpRequest)
+	response, err := deepseekHTTPClient.Do(httpRequest)
 	if err != nil {
 		return DeepseekChatResult{}, errors.Wrap(err, "failed to send request")
 	}

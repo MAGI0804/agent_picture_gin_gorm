@@ -5,7 +5,7 @@ import "gorm.io/gorm"
 // UserModelConfig 表示用户绑定的模型配置。
 type UserModelConfig struct {
 	BaseModel
-	UserID                     uint   `gorm:"column:user_id;uniqueIndex;not null" json:"user_id"`                                // 所属用户 ID。
+	UserID                     uint   `gorm:"column:user_id;uniqueIndex:idx_user_model_configs_user_id;not null" json:"user_id"` // 所属用户 ID。
 	SelectedTextModelConfigID  uint   `gorm:"column:selected_text_model_config_id;index" json:"selected_text_model_config_id"`   // 用户选择的全局文本模型配置 ID。
 	SelectedImageModelConfigID uint   `gorm:"column:selected_image_model_config_id;index" json:"selected_image_model_config_id"` // 用户选择的全局图片模型配置 ID。
 	Provider                   string `gorm:"column:provider;size:64;not null;default:deepseek" json:"provider"`                 // 模型供应商，例如 deepseek、openai。
@@ -25,6 +25,7 @@ type UserModelConfig struct {
 	ClaudeCodeMaxOutputTokens   string `gorm:"column:claude_code_max_output_tokens;size:32" json:"claude_code_max_output_tokens"`    // 最大输出 token。
 
 	CommonTimestampsField
+	RuntimeConfig JSONMap `gorm:"-" json:"-"`
 }
 
 // TableName 返回用户模型配置表名。

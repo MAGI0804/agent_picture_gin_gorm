@@ -5,12 +5,12 @@ import "gorm.io/gorm"
 // ModelConfig 全局模型配置，用于管理系统可用的 AI 模型。
 type ModelConfig struct {
 	BaseModel
-	ModelName       string  `gorm:"column:model_name;size:128;not null" json:"model_name"`                  // 模型名称
-	RequestURL      string  `gorm:"column:request_url;size:512;not null" json:"request_url"`                // API 请求地址
-	IsTextModel     bool    `gorm:"column:is_text_model;not null;default:false" json:"is_text_model"`       // 是否为文本模型
-	IsImageModel    bool    `gorm:"column:is_image_model;not null;default:false" json:"is_image_model"`     // 是否为图片模型
-	SupportThinking bool    `gorm:"column:support_thinking;not null;default:false" json:"support_thinking"` // 是否支持思考模式
-	ConfigInfo      JSONMap `gorm:"column:config_info;type:json" json:"config_info"`                        // 额外配置信息（JSON格式）
+	ModelName       string  `gorm:"column:model_name;size:128;not null" json:"model_name"`                                            // 模型名称
+	RequestURL      string  `gorm:"column:request_url;size:512;not null" json:"request_url"`                                          // API 请求地址
+	IsTextModel     bool    `gorm:"column:is_text_model;index:idx_model_configs_text;not null;default:false" json:"is_text_model"`    // 是否为文本模型
+	IsImageModel    bool    `gorm:"column:is_image_model;index:idx_model_configs_image;not null;default:false" json:"is_image_model"` // 是否为图片模型
+	SupportThinking bool    `gorm:"column:support_thinking;not null;default:false" json:"support_thinking"`                           // 是否支持思考模式
+	ConfigInfo      JSONMap `gorm:"column:config_info;type:json" json:"config_info"`                                                  // 额外配置信息（JSON格式）
 	CommonTimestampsField
 }
 

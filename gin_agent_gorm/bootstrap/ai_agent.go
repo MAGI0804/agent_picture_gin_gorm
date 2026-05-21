@@ -26,7 +26,25 @@ func setupAIAgent() {
 		&model.UserModelConfig{},
 	)
 	logger.LogErrorIf(err)
+	ensureAIAgentIndexes()
 	seedDefaultModelConfigs()
+}
+
+func ensureAIAgentIndexes() {
+	indexes := []struct {
+		value interface{}
+		name  string
+	}{
+		{value: &model.UserModelConfig{}, name: "idx_user_model_configs_user_id"},
+		{value: &model.ModelConfig{}, name: "idx_model_configs_text"},
+		{value: &model.ModelConfig{}, name: "idx_model_configs_image"},
+	}
+	for _, index := range indexes {
+		if database.DB.Migrator().HasIndex(index.value, index.name) {
+			continue
+		}
+		logger.LogErrorIf(database.DB.Migrator().CreateIndex(index.value, index.name))
+	}
 }
 
 func seedDefaultModelConfigs() {

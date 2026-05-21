@@ -15,6 +15,7 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
+	"gin-biz-web-api/internal/service/model_request"
 	"gin-biz-web-api/model"
 	"gin-biz-web-api/pkg/logger"
 )
@@ -96,6 +97,9 @@ func (provider *MockProvider) Chat(request ChatRequest) (ChatResult, error) {
 func (provider *HTTPProvider) Chat(request ChatRequest) (ChatResult, error) {
 	providerName := strings.ToLower(strings.TrimSpace(provider.config.Provider))
 	baseURL := strings.TrimSpace(provider.config.BaseURL)
+	if isDeepseekChatProvider(providerName, baseURL) {
+		return provider.chatDeepseek(request, baseURL)
+	}
 	if isAnthropicProvider(providerName, provider.config) {
 		if strings.TrimSpace(provider.config.AnthropicBaseURL) != "" {
 			baseURL = strings.TrimSpace(provider.config.AnthropicBaseURL)
@@ -103,6 +107,43 @@ func (provider *HTTPProvider) Chat(request ChatRequest) (ChatResult, error) {
 		return provider.chatAnthropic(baseURL, request)
 	}
 	return provider.chatOpenAICompatible(baseURL, request)
+}
+
+func (provider *HTTPProvider) chatDeepseek(request ChatRequest, baseURL string) (ChatResult, error) {
+	apiKey := strings.TrimSpace(provider.config.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(provider.config.AnthropicAuthToken)
+	}
+	modelName := strings.TrimSpace(provider.config.ChatModel)
+	if modelName == "" {
+		modelName = strings.TrimSpace(provider.config.AnthropicModel)
+	}
+	messages := make([]model_request.DeepseekMessage, 0, len(request.Messages))
+	for _, message := range request.Messages {
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		messages = append(messages, model_request.DeepseekMessage{
+			Role:    normalizeChatRole(message.Role),
+			Content: content,
+		})
+	}
+	result, err := model_request.SendDeepseekRequest(baseURL, apiKey, modelName, model_request.DeepseekChatRequest{
+		System:          request.System,
+		Messages:        messages,
+		Stream:          request.Stream,
+		ReturnReasoning: request.ReturnReasoning,
+		Temperature:     parseTemperature(provider.config.Temperature),
+		MaxTokens:       parseMaxTokens(provider.config.ClaudeCodeMaxOutputTokens, 4096),
+	})
+	if err != nil {
+		return ChatResult{}, err
+	}
+	return ChatResult{
+		Content:          result.Content,
+		ReasoningContent: result.ReasoningContent,
+	}, nil
 }
 
 func (provider *HTTPProvider) chatAnthropic(baseURL string, request ChatRequest) (ChatResult, error) {
@@ -389,6 +430,14 @@ func isAnthropicProvider(providerName string, config model.UserModelConfig) bool
 	return strings.TrimSpace(config.AnthropicBaseURL) != "" && strings.TrimSpace(config.AnthropicModel) != ""
 }
 
+func isDeepseekChatProvider(providerName string, baseURL string) bool {
+	if !strings.Contains(providerName, "deepseek") {
+		return false
+	}
+	lowerBaseURL := strings.ToLower(baseURL)
+	return !strings.Contains(lowerBaseURL, "anthropic")
+}
+
 func normalizeChatRole(role string) string {
 	switch strings.ToLower(strings.TrimSpace(role)) {
 	case "assistant":
@@ -546,10 +595,16 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 		apiKey = strings.TrimSpace(provider.config.AnthropicAuthToken)
 	}
 	baseURL := strings.TrimSpace(provider.config.BaseURL)
-	if modelName == "" || apiKey == "" || baseURL == "" {
+	if modelName == "" || baseURL == "" {
 		return (&MockProvider{}).Generate(request)
 	}
 
+	if isJimengProvider(providerName, baseURL) {
+		return provider.generateJimengImage(request, baseURL, modelName)
+	}
+	if apiKey == "" {
+		return (&MockProvider{}).Generate(request)
+	}
 	if isDashScopeProvider(providerName, baseURL) {
 		return provider.generateDashScopeImage(request, baseURL, apiKey, modelName)
 	}
@@ -574,6 +629,59 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 		return nil, err
 	}
 	return []GeneratedFile{file}, nil
+}
+
+func (provider *HTTPProvider) generateJimengImage(
+	request GenerationRequest,
+	baseURL string,
+	modelName string,
+) ([]GeneratedFile, error) {
+	config := model_request.JimengConfig{
+		AccessKeyID:     runtimeConfigString(provider.config, "access_key_id", "ak"),
+		SecretAccessKey: runtimeConfigString(provider.config, "secret_access_key", "sk"),
+		Region:          runtimeConfigString(provider.config, "region"),
+		Service:         runtimeConfigString(provider.config, "service"),
+	}
+	if config.Region == "" {
+		config.Region = "cn-north-1"
+	}
+	if config.Service == "" {
+		config.Service = "cv"
+	}
+	reqKey := runtimeConfigString(provider.config, "req_key")
+	if reqKey == "" {
+		reqKey = model_request.JimengReqKey
+	}
+	response, err := model_request.SendJimengImageRequest(baseURL, config, model_request.JimengImageRequest{
+		ReqKey:      reqKey,
+		Prompt:      truncateForJimengPrompt(request.Prompt),
+		Width:       runtimeConfigInt(provider.config, "width"),
+		Height:      runtimeConfigInt(provider.config, "height"),
+		Scale:       runtimeConfigInt(provider.config, "scale"),
+		ForceSingle: runtimeConfigBool(provider.config, "force_single"),
+		ReturnURL:   true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	payload := map[string]interface{}{
+		"provider":     provider.config.Provider,
+		"model":        modelName,
+		"task_id":      response.Data.TaskID,
+		"request_id":   response.RequestID,
+		"time_elapsed": response.TimeElapsed,
+		"message":      response.Message,
+	}
+	content, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return nil, errors.Wrap(err, "encode jimeng task artifact")
+	}
+	return []GeneratedFile{{
+		Name:     "jimeng-task.json",
+		Kind:     "json",
+		MimeType: "application/json; charset=utf-8",
+		Content:  content,
+	}}, nil
 }
 
 func (provider *HTTPProvider) generateDashScopeImage(
@@ -612,6 +720,65 @@ func isDashScopeProvider(providerName string, baseURL string) bool {
 	return strings.Contains(providerName, "dashscope") ||
 		strings.Contains(providerName, "qwen") ||
 		strings.Contains(strings.ToLower(baseURL), "dashscope")
+}
+
+func isJimengProvider(providerName string, baseURL string) bool {
+	lowerBaseURL := strings.ToLower(baseURL)
+	return strings.Contains(providerName, "jimeng") ||
+		strings.Contains(providerName, "doubao") ||
+		strings.Contains(providerName, "volc") ||
+		strings.Contains(lowerBaseURL, "volcengine") ||
+		strings.Contains(lowerBaseURL, "visual.volcengineapi")
+}
+
+func runtimeConfigString(config model.UserModelConfig, keys ...string) string {
+	for _, key := range keys {
+		value, ok := config.RuntimeConfig[key]
+		if !ok || value == nil {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				return strings.TrimSpace(typed)
+			}
+		default:
+			text := strings.TrimSpace(fmt.Sprint(typed))
+			if text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func runtimeConfigInt(config model.UserModelConfig, key string) int {
+	value := runtimeConfigString(config, key)
+	if value == "" {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func runtimeConfigBool(config model.UserModelConfig, key string) bool {
+	switch strings.ToLower(runtimeConfigString(config, key)) {
+	case "true", "1", "yes", "y":
+		return true
+	default:
+		return false
+	}
+}
+
+func truncateForJimengPrompt(prompt string) string {
+	runes := []rune(strings.TrimSpace(prompt))
+	if len(runes) <= 800 {
+		return string(runes)
+	}
+	return string(runes[:800])
 }
 
 func (provider *HTTPProvider) parseOpenAIImageFile(body []byte, prompt string) (GeneratedFile, error) {

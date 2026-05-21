@@ -3,6 +3,7 @@ package agent_dao
 import (
 	"gin-biz-web-api/model"
 	"gin-biz-web-api/pkg/database"
+	"gorm.io/gorm/clause"
 )
 
 // AgentDAO 封装 AI Agent 模块的数据库访问。
@@ -126,6 +127,14 @@ func (dao *AgentDAO) CreateAgentStep(step *model.AgentStep) error {
 	return database.DB.Create(step).Error
 }
 
+// CreateAgentSteps batch-inserts Agent step records to reduce DB round-trips.
+func (dao *AgentDAO) CreateAgentSteps(steps []model.AgentStep) error {
+	if len(steps) == 0 {
+		return nil
+	}
+	return database.DB.Create(&steps).Error
+}
+
 // ListAgentSteps 查询指定 Agent Run 的步骤列表，并校验用户归属。
 func (dao *AgentDAO) ListAgentSteps(userID uint, runID uint) ([]model.AgentStep, error) {
 	var steps []model.AgentStep
@@ -142,6 +151,14 @@ func (dao *AgentDAO) CreateContextMemory(memory *model.ContextMemory) error {
 	return database.DB.Create(memory).Error
 }
 
+// CreateContextMemories batch-inserts context memories.
+func (dao *AgentDAO) CreateContextMemories(memories []model.ContextMemory) error {
+	if len(memories) == 0 {
+		return nil
+	}
+	return database.DB.Create(&memories).Error
+}
+
 // ListContextMemories 查询会话上下文记忆。
 func (dao *AgentDAO) ListContextMemories(userID uint, conversationID uint, limit int) ([]model.ContextMemory, error) {
 	var memories []model.ContextMemory
@@ -155,6 +172,15 @@ func (dao *AgentDAO) ListContextMemories(userID uint, conversationID uint, limit
 // CreateArtifact 创建产物元数据。
 func (dao *AgentDAO) CreateArtifact(artifact *model.Artifact) error {
 	return database.DB.Create(artifact).Error
+}
+
+// CreateArtifacts batch-inserts artifact metadata to reduce DB round-trips.
+func (dao *AgentDAO) CreateArtifacts(artifacts []model.Artifact) ([]model.Artifact, error) {
+	if len(artifacts) == 0 {
+		return artifacts, nil
+	}
+	err := database.DB.Create(&artifacts).Error
+	return artifacts, err
 }
 
 // ListArtifacts 查询会话产物列表。
@@ -229,17 +255,6 @@ func (dao *AgentDAO) SaveUserModelSelection(
 	textModelConfigID uint,
 	imageModelConfigID uint,
 ) error {
-	var exists model.UserModelConfig
-	err := database.DB.Where("user_id = ?", userID).First(&exists).Error
-	if err == nil {
-		return database.DB.Model(&model.UserModelConfig{}).
-			Where("id = ?", exists.ID).
-			Updates(map[string]interface{}{
-				"selected_text_model_config_id":  textModelConfigID,
-				"selected_image_model_config_id": imageModelConfigID,
-			}).Error
-	}
-
 	config := model.UserModelConfig{
 		UserID:                     userID,
 		SelectedTextModelConfigID:  textModelConfigID,
@@ -251,5 +266,12 @@ func (dao *AgentDAO) SaveUserModelSelection(
 		APIKey:                     "",
 		Temperature:                "0.7",
 	}
-	return database.DB.Create(&config).Error
+	return database.DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"selected_text_model_config_id",
+			"selected_image_model_config_id",
+			"updated_at",
+		}),
+	}).Create(&config).Error
 }

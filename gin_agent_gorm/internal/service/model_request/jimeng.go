@@ -15,6 +15,8 @@ import (
 	"github.com/pkg/errors"
 )
 
+var jimengHTTPClient = &http.Client{Timeout: 60 * time.Second}
+
 const (
 	JimengReqKey  = "jimeng_seedream46_cvtob"
 	JimengAction  = "CVSync2AsyncSubmitTask"
@@ -31,30 +33,30 @@ type JimengConfig struct {
 
 // JimengImageRequest 即梦AI图片生成请求参数。
 type JimengImageRequest struct {
-	ReqKey     string   `json:"req_key"`      // 服务标识，固定值: jimeng_seedream46_cvtob
-	ImageURLs  []string `json:"image_urls"`   // 图片文件URL，支持0-14张图
-	Prompt     string   `json:"prompt"`       // 用于生成图像的提示词，中英文均可，最长不超过800字符
-	Size       int      `json:"size,omitempty"`      // 生成图片的面积，默认4194304(2048*2048)，范围[1024*1024, 4096*4096]
-	Width      int      `json:"width,omitempty"`     // 生成图像宽度，需与height同时传才生效
-	Height     int      `json:"height,omitempty"`    // 生成图像高度，需与width同时传才生效
-	Scale      int      `json:"scale,omitempty"`     // 文本描述影响程度，默认50，范围[1,100]
-	ForceSingle bool    `json:"force_single,omitempty"` // 是否强制生成单图，默认false
-	MinRatio   float64  `json:"min_ratio,omitempty"`   // 生图宽高比最小值，默认1/3，范围[1/16,16)
-	MaxRatio   float64  `json:"max_ratio,omitempty"`   // 生图宽高比最大值，默认3，范围(1/16,16]
-	CallbackURL string  `json:"callback_url,omitempty"` // 回调接口URL（异步回调时使用）
-	ReturnURL  bool    `json:"return_url,omitempty"`   // 是否以链接形式返回图片，默认false（异步回调时使用）
-	LogoInfo   string  `json:"logo_info,omitempty"`    // 水印信息，JSON字符串（异步回调时使用）
-	AIGCMeta   string  `json:"aigc_meta,omitempty"`    // 隐式标识，JSON字符串（异步回调时使用）
+	ReqKey      string   `json:"req_key"`                // 服务标识，固定值: jimeng_seedream46_cvtob
+	ImageURLs   []string `json:"image_urls"`             // 图片文件URL，支持0-14张图
+	Prompt      string   `json:"prompt"`                 // 用于生成图像的提示词，中英文均可，最长不超过800字符
+	Size        int      `json:"size,omitempty"`         // 生成图片的面积，默认4194304(2048*2048)，范围[1024*1024, 4096*4096]
+	Width       int      `json:"width,omitempty"`        // 生成图像宽度，需与height同时传才生效
+	Height      int      `json:"height,omitempty"`       // 生成图像高度，需与width同时传才生效
+	Scale       int      `json:"scale,omitempty"`        // 文本描述影响程度，默认50，范围[1,100]
+	ForceSingle bool     `json:"force_single,omitempty"` // 是否强制生成单图，默认false
+	MinRatio    float64  `json:"min_ratio,omitempty"`    // 生图宽高比最小值，默认1/3，范围[1/16,16)
+	MaxRatio    float64  `json:"max_ratio,omitempty"`    // 生图宽高比最大值，默认3，范围(1/16,16]
+	CallbackURL string   `json:"callback_url,omitempty"` // 回调接口URL（异步回调时使用）
+	ReturnURL   bool     `json:"return_url,omitempty"`   // 是否以链接形式返回图片，默认false（异步回调时使用）
+	LogoInfo    string   `json:"logo_info,omitempty"`    // 水印信息，JSON字符串（异步回调时使用）
+	AIGCMeta    string   `json:"aigc_meta,omitempty"`    // 隐式标识，JSON字符串（异步回调时使用）
 }
 
 // JimengImageResponse 即梦AI图片生成响应结果。
 type JimengImageResponse struct {
-	Code       int    `json:"code"`        // 状态码，10000表示成功
-	Data       struct {
-		TaskID string `json:"task_id"`   // 任务ID，用于查询接口
+	Code int `json:"code"` // 状态码，10000表示成功
+	Data struct {
+		TaskID string `json:"task_id"` // 任务ID，用于查询接口
 	} `json:"data"`
-	Message    string `json:"message"`     // 响应消息
-	RequestID  string `json:"request_id"`  // 请求ID，排查错误使用
+	Message     string `json:"message"`      // 响应消息
+	RequestID   string `json:"request_id"`   // 请求ID，排查错误使用
 	TimeElapsed string `json:"time_elapsed"` // 链路耗时
 }
 
@@ -155,7 +157,7 @@ func signJimengRequest(request *http.Request, config JimengConfig, body []byte) 
 }
 
 // SendJimengImageRequest 调用即梦AI-图片生成4.6模型。
-// 
+//
 // 参数:
 //   - baseURL: 即梦AI API的基础地址
 //   - config: 认证配置
@@ -305,8 +307,7 @@ func SendJimengImageRequest(baseURL string, config JimengConfig, request JimengI
 		return JimengImageResponse{}, errors.Wrap(err, "failed to sign request")
 	}
 
-	client := &http.Client{Timeout: 60 * time.Second}
-	response, err := client.Do(httpRequest)
+	response, err := jimengHTTPClient.Do(httpRequest)
 	if err != nil {
 		return JimengImageResponse{}, errors.Wrap(err, "failed to send request")
 	}

@@ -17,15 +17,19 @@ import (
 
 // AgentService 封装 AI Agent 会话、消息、编排和产物生成业务。
 type AgentService struct {
-	dao   *agent_dao.AgentDAO // 数据访问对象。
-	store ObjectStore         // 产物对象存储，首版使用本地文件实现。
+	dao               *agent_dao.AgentDAO // 数据访问对象。
+	store             ObjectStore         // 产物对象存储，首版使用本地文件实现。
+	userConfigCache   map[uint]model.UserModelConfig
+	globalConfigCache map[uint]model.ModelConfig
 }
 
 // NewAgentService 创建 AI Agent 业务服务。
 func NewAgentService() *AgentService {
 	return &AgentService{
-		dao:   agent_dao.NewAgentDAO(),
-		store: NewObjectStore(),
+		dao:               agent_dao.NewAgentDAO(),
+		store:             NewObjectStore(),
+		userConfigCache:   map[uint]model.UserModelConfig{},
+		globalConfigCache: map[uint]model.ModelConfig{},
 	}
 }
 
@@ -141,12 +145,16 @@ func (svc *AgentService) ListRunEvents(userID uint, runID uint) ([]model.AgentSt
 
 // GetModelConfig 查询当前用户绑定的模型配置，不存在时返回默认配置。
 func (svc *AgentService) GetModelConfig(userID uint) (model.UserModelConfig, error) {
+	if config, ok := svc.userConfigCache[userID]; ok {
+		return config, nil
+	}
 	config, err := svc.dao.FindUserModelConfig(userID)
 	if err == nil {
+		svc.userConfigCache[userID] = config
 		return config, nil
 	}
 
-	return model.UserModelConfig{
+	config = model.UserModelConfig{
 		UserID:                      userID,
 		Provider:                    "deepseek-anthropic",
 		ChatModel:                   "deepseek-v4-pro",
@@ -162,7 +170,9 @@ func (svc *AgentService) GetModelConfig(userID uint) (model.UserModelConfig, err
 		AnthropicDefaultHaikuModel:  "deepseek-v4-pro",
 		ClaudeCodeSubagentModel:     "deepseek-v4-pro",
 		ClaudeCodeMaxOutputTokens:   "32000",
-	}, nil
+	}
+	svc.userConfigCache[userID] = config
+	return config, nil
 }
 
 // GetModelSelection returns the user's selected global models plus model choices.
@@ -241,6 +251,7 @@ func (svc *AgentService) SaveModelSelection(
 	if err != nil {
 		return nil, err
 	}
+	delete(svc.userConfigCache, userID)
 	return svc.GetModelSelection(userID)
 }
 
@@ -307,6 +318,7 @@ func (svc *AgentService) SaveModelConfig(userID uint, request agent_request.Save
 	if err := svc.dao.SaveUserModelConfig(&config); err != nil {
 		return config, err
 	}
+	delete(svc.userConfigCache, userID)
 	return svc.GetModelConfig(userID)
 }
 
@@ -476,6 +488,7 @@ func mergeUserConfigWithGlobalModel(
 	modelKind string,
 ) model.UserModelConfig {
 	config := userConfig
+	config.RuntimeConfig = globalConfig.ConfigInfo
 	provider := configInfoString(globalConfig.ConfigInfo, "provider")
 	if provider == "" {
 		provider = "mock"
@@ -680,7 +693,6 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 		"long_term_memories": memories,
 	}
 	contextBytes, _ := json.Marshal(contextPackage)
-	_ = svc.createStepWithThinking(run.ID, "context_agent", string(contextBytes), "已读取最近上下文和长期记忆。", "检索当前会话记忆、用户偏好和相关历史任务。", "")
 
 	rawPrompt := svc.composePrompt(conversation.ID, content, memories, questions)
 	promptResult, err := svc.refineGenerationPrompt(userID, normalizeTaskType(request.TaskType), rawPrompt)
@@ -692,14 +704,21 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 	if strings.TrimSpace(prompt) == "" {
 		prompt = rawPrompt
 	}
-	_ = svc.createStepWithThinking(
-		run.ID,
-		"prompt_agent",
-		rawPrompt,
-		prompt,
-		"调用当前文本模型，把用户需求、追问回答和上下文整理成图片模型可执行提示词。",
-		promptResult.ReasoningContent,
-	)
+	_ = svc.createStepsWithThinking(run.ID, []stepRecord{
+		{
+			name:         "context_agent",
+			input:        string(contextBytes),
+			output:       "已读取最近上下文和长期记忆。",
+			thinkContent: "检索当前会话记忆、用户偏好和相关历史任务。",
+		},
+		{
+			name:             "prompt_agent",
+			input:            rawPrompt,
+			output:           prompt,
+			thinkContent:     "调用当前文本模型，把用户需求、追问回答和上下文整理成图片模型可执行提示词。",
+			reasoningContent: promptResult.ReasoningContent,
+		},
+	})
 
 	files, err := NewProviderWithConfig(config).Generate(GenerationRequest{
 		Prompt:          prompt,
@@ -714,10 +733,6 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
 	}
-	_ = svc.createStepWithThinking(run.ID, "image_agent", prompt, "已生成图片候选。", "根据图片生成模式选择图片模型并生成可预览产物。", "return_reasoning=true；图片生成模型的 reasoning 内容会写入该字段。")
-	_ = svc.createStepWithThinking(run.ID, "html_agent", prompt, "已生成 HTML 预览文件。", "将生成结果组织成可在右侧 iframe 预览的 HTML 文件。", "return_reasoning=true；HTML 生成模型的 reasoning 内容会写入该字段。")
-	_ = svc.createStepWithThinking(run.ID, "review_agent", prompt, "mock review passed", "检查产物是否可预览、可下载，并确认元数据完整。", "")
-
 	artifacts := make([]model.Artifact, 0, len(files))
 	for _, file := range files {
 		objectKey := fmt.Sprintf("user-%d/conversation-%d/run-%d/%s", userID, conversation.ID, run.ID, file.Name)
@@ -738,12 +753,40 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 			SizeBytes:      stored.SizeBytes,
 			Hash:           stored.Hash,
 		}
-		if err := svc.dao.CreateArtifact(&artifact); err != nil {
-			return nil, err
-		}
 		artifacts = append(artifacts, artifact)
 	}
-	_ = svc.createStepWithThinking(run.ID, "artifact_agent", prompt, "产物已保存并完成元数据入库。", "保存对象存储文件并把预览地址、下载元数据写入数据库。", "")
+	artifacts, err = svc.dao.CreateArtifacts(artifacts)
+	if err != nil {
+		return nil, err
+	}
+	_ = svc.createStepsWithThinking(run.ID, []stepRecord{
+		{
+			name:             "image_agent",
+			input:            prompt,
+			output:           "已提交图片模型并生成产物。",
+			thinkContent:     "根据图片生成模式选择图片模型并生成可预览产物。",
+			reasoningContent: "图片模型由所选全局图片模型配置决定；即梦模型会返回 task_id JSON 产物。",
+		},
+		{
+			name:             "html_agent",
+			input:            prompt,
+			output:           "已整理可预览产物。",
+			thinkContent:     "将生成结果组织成右侧可预览或可下载的产物。",
+			reasoningContent: "如果图片模型返回异步任务，则以 JSON 任务产物呈现。",
+		},
+		{
+			name:         "review_agent",
+			input:        prompt,
+			output:       "review passed",
+			thinkContent: "检查产物是否可预览、可下载，并确认元数据完整。",
+		},
+		{
+			name:         "artifact_agent",
+			input:        prompt,
+			output:       "产物已保存并完成元数据入库。",
+			thinkContent: "保存对象存储文件并把预览地址、下载元数据写入数据库。",
+		},
+	})
 
 	assistantMessage := model.Message{
 		ConversationID: conversation.ID,
@@ -757,32 +800,32 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 		return nil, err
 	}
 
-	memory := model.ContextMemory{
-		ConversationID: conversation.ID,
-		UserID:         userID,
-		Kind:           "summary",
-		Content:        "用户补充需求：" + content,
-		Score:          10,
+	memoriesToCreate := []model.ContextMemory{
+		{
+			ConversationID: conversation.ID,
+			UserID:         userID,
+			Kind:           "summary",
+			Content:        "用户补充需求：" + content,
+			Score:          10,
+		},
+		{
+			ConversationID: conversation.ID,
+			UserID:         userID,
+			Kind:           "artifact_requirement",
+			Content:        "生成提示词：" + prompt,
+			Score:          8,
+		},
 	}
-	_ = svc.dao.CreateContextMemory(&memory)
-	requirementMemory := model.ContextMemory{
-		ConversationID: conversation.ID,
-		UserID:         userID,
-		Kind:           "artifact_requirement",
-		Content:        "生成提示词：" + prompt,
-		Score:          8,
-	}
-	_ = svc.dao.CreateContextMemory(&requirementMemory)
 	if preference := extractPreference(content); preference != "" {
-		preferenceMemory := model.ContextMemory{
+		memoriesToCreate = append(memoriesToCreate, model.ContextMemory{
 			ConversationID: conversation.ID,
 			UserID:         userID,
 			Kind:           "preference",
 			Content:        preference,
 			Score:          12,
-		}
-		_ = svc.dao.CreateContextMemory(&preferenceMemory)
+		})
 	}
+	_ = svc.dao.CreateContextMemories(memoriesToCreate)
 	run.Status = "completed"
 	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": run.Status})
 	steps, _ := svc.dao.ListAgentSteps(userID, run.ID)
@@ -851,6 +894,30 @@ func (svc *AgentService) createStepWithThinking(runID uint, name string, input s
 		ReasoningContent: reasoningContent,
 	}
 	return svc.dao.CreateAgentStep(&step)
+}
+
+func (svc *AgentService) createStepsWithThinking(runID uint, steps []stepRecord) error {
+	agentSteps := make([]model.AgentStep, 0, len(steps))
+	for _, step := range steps {
+		agentSteps = append(agentSteps, model.AgentStep{
+			AgentRunID:       runID,
+			Name:             step.name,
+			Status:           "completed",
+			Input:            step.input,
+			Output:           step.output,
+			ThinkContent:     step.thinkContent,
+			ReasoningContent: step.reasoningContent,
+		})
+	}
+	return svc.dao.CreateAgentSteps(agentSteps)
+}
+
+type stepRecord struct {
+	name             string
+	input            string
+	output           string
+	thinkContent     string
+	reasoningContent string
 }
 
 func defaultStepThinkContent(name string) string {
@@ -1000,8 +1067,14 @@ func (svc *AgentService) ListModelConfigs(page, perPage int, isTextModel, isImag
 
 // GetModelConfigByID 根据 ID 获取模型配置。
 func (svc *AgentService) GetModelConfigByID(id uint) (model.ModelConfig, error) {
+	if config, ok := svc.globalConfigCache[id]; ok {
+		return config, nil
+	}
 	var config model.ModelConfig
 	err := database.DB.Where("id = ?", id).First(&config).Error
+	if err == nil {
+		svc.globalConfigCache[id] = config
+	}
 	return config, err
 }
 
