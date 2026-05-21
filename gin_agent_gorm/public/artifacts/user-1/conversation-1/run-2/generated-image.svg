@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#172554"/>
+      <stop offset="55%" stop-color="#0f766e"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="1060" cy="140" r="90" fill="#fde68a" opacity="0.9"/>
+  <rect x="110" y="140" width="520" height="360" rx="28" fill="#ffffff" opacity="0.15"/>
+  <text x="150" y="255" fill="#ffffff" font-size="54" font-family="Arial, sans-serif" font-weight="700">AI Agent Image</text>
+  <foreignObject x="150" y="300" width="900" height="260">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,sans-serif;color:white;font-size:34px;line-height:1.35;">conversation:1
+生成标题为幼岚秋季棕色风衣的商品主图</div>
+  </foreignObject>
+</svg>

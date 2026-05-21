@@ -1,0 +1,542 @@
+package agent_svc
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"html"
+	"io/ioutil"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pkg/errors"
+	"go.uber.org/zap"
+
+	"gin-biz-web-api/model"
+	"gin-biz-web-api/pkg/logger"
+)
+
+type GenerationRequest struct {
+	Prompt          string
+	Intent          string
+	TaskType        string
+	Stream          bool
+	ReturnReasoning bool
+	Temperature     string
+	ModelConfig     model.UserModelConfig
+}
+
+type ChatMessage struct {
+	Role    string
+	Content string
+}
+
+type ChatRequest struct {
+	System          string
+	Messages        []ChatMessage
+	ModelConfig     model.UserModelConfig
+	Stream          bool
+	ReturnReasoning bool
+}
+
+type ChatResult struct {
+	Content          string
+	ReasoningContent string
+}
+
+type GeneratedFile struct {
+	Name     string
+	Kind     string
+	MimeType string
+	Content  []byte
+}
+
+type Provider interface {
+	Chat(request ChatRequest) (ChatResult, error)
+	Generate(request GenerationRequest) ([]GeneratedFile, error)
+}
+
+type MockProvider struct {
+}
+
+type HTTPProvider struct {
+	config model.UserModelConfig
+	client *http.Client
+}
+
+func NewProvider() Provider {
+	return &MockProvider{}
+}
+
+func NewProviderWithConfig(config model.UserModelConfig) Provider {
+	provider := strings.ToLower(strings.TrimSpace(config.Provider))
+	if provider == "" || provider == "mock" {
+		return &MockProvider{}
+	}
+	return &HTTPProvider{
+		config: config,
+		client: &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+func (provider *MockProvider) Chat(request ChatRequest) (ChatResult, error) {
+	if len(request.Messages) == 0 {
+		return ChatResult{Content: "Mock provider is ready. Please send a message.", ReasoningContent: "Mock reasoning: 已开启 return_reasoning，用于前端展示思考摘要。"}, nil
+	}
+	last := strings.TrimSpace(request.Messages[len(request.Messages)-1].Content)
+	if last == "" {
+		return ChatResult{Content: "Mock provider received an empty message.", ReasoningContent: "Mock reasoning: 用户输入为空，直接返回提示。"}, nil
+	}
+	return ChatResult{Content: "Mock provider reply: " + last, ReasoningContent: "Mock reasoning: 已读取上下文、模型配置和用户最新问题，生成直接回复。"}, nil
+}
+
+func (provider *HTTPProvider) Chat(request ChatRequest) (ChatResult, error) {
+	providerName := strings.ToLower(strings.TrimSpace(provider.config.Provider))
+	baseURL := strings.TrimSpace(provider.config.BaseURL)
+	if isAnthropicProvider(providerName, provider.config) {
+		if strings.TrimSpace(provider.config.AnthropicBaseURL) != "" {
+			baseURL = strings.TrimSpace(provider.config.AnthropicBaseURL)
+		}
+		return provider.chatAnthropic(baseURL, request)
+	}
+	return provider.chatOpenAICompatible(baseURL, request)
+}
+
+func (provider *HTTPProvider) chatAnthropic(baseURL string, request ChatRequest) (ChatResult, error) {
+	apiKey := strings.TrimSpace(provider.config.AnthropicAuthToken)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(provider.config.APIKey)
+	}
+	if apiKey == "" {
+		return ChatResult{}, errors.New("model api key is empty")
+	}
+
+	modelName := strings.TrimSpace(provider.config.AnthropicModel)
+	if modelName == "" {
+		modelName = strings.TrimSpace(provider.config.ChatModel)
+	}
+	if modelName == "" {
+		return ChatResult{}, errors.New("chat model is empty")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return ChatResult{}, errors.New("anthropic base url is empty")
+	}
+
+	payloadMessages := make([]map[string]interface{}, 0, len(request.Messages))
+	for _, message := range request.Messages {
+		role := normalizeChatRole(message.Role)
+		if role == "system" {
+			continue
+		}
+		if role != "assistant" {
+			role = "user"
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		payloadMessages = append(payloadMessages, map[string]interface{}{
+			"role":    role,
+			"content": content,
+		})
+	}
+	if len(payloadMessages) == 0 {
+		return ChatResult{}, errors.New("chat messages are empty")
+	}
+
+	payload := map[string]interface{}{
+		"model":            modelName,
+		"max_tokens":       parseMaxTokens(provider.config.ClaudeCodeMaxOutputTokens, 4096),
+		"temperature":      parseTemperature(provider.config.Temperature),
+		"system":           request.System,
+		"messages":         payloadMessages,
+		"stream":           request.Stream,
+		"return_reasoning": request.ReturnReasoning,
+	}
+
+	endpoint := joinBaseURL(baseURL, "v1/messages")
+	body, err := provider.doJSON("POST", endpoint, payload, modelName, "anthropic", func(req *http.Request) {
+		req.Header.Set("x-api-key", apiKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+		if strings.Contains(strings.ToLower(baseURL), "deepseek") {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+	})
+	if err != nil {
+		return ChatResult{}, err
+	}
+
+	var response struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		ReasoningContent string `json:"reasoning_content"`
+		Error            *struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		streamResult := parseStreamingChatResult(body)
+		if strings.TrimSpace(streamResult.Content) != "" {
+			return streamResult, nil
+		}
+		return ChatResult{}, errors.Wrap(err, "decode anthropic response")
+	}
+	if response.Error != nil {
+		return ChatResult{}, errors.Errorf("model api error: %s", response.Error.Message)
+	}
+	parts := make([]string, 0, len(response.Content))
+	for _, item := range response.Content {
+		if strings.TrimSpace(item.Text) != "" {
+			parts = append(parts, item.Text)
+		}
+	}
+	content := strings.TrimSpace(strings.Join(parts, "\n"))
+	if content == "" {
+		streamResult := parseStreamingChatResult(body)
+		if strings.TrimSpace(streamResult.Content) != "" {
+			return streamResult, nil
+		}
+		return ChatResult{}, errors.New("model returned empty response")
+	}
+	return ChatResult{Content: content, ReasoningContent: strings.TrimSpace(response.ReasoningContent)}, nil
+}
+
+func (provider *HTTPProvider) chatOpenAICompatible(baseURL string, request ChatRequest) (ChatResult, error) {
+	apiKey := strings.TrimSpace(provider.config.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(provider.config.AnthropicAuthToken)
+	}
+	if apiKey == "" {
+		return ChatResult{}, errors.New("model api key is empty")
+	}
+
+	modelName := strings.TrimSpace(provider.config.ChatModel)
+	if modelName == "" {
+		modelName = strings.TrimSpace(provider.config.AnthropicModel)
+	}
+	if modelName == "" {
+		return ChatResult{}, errors.New("chat model is empty")
+	}
+	if strings.TrimSpace(baseURL) == "" {
+		return ChatResult{}, errors.New("model base url is empty")
+	}
+
+	payloadMessages := make([]map[string]string, 0, len(request.Messages)+1)
+	if strings.TrimSpace(request.System) != "" {
+		payloadMessages = append(payloadMessages, map[string]string{"role": "system", "content": request.System})
+	}
+	for _, message := range request.Messages {
+		role := normalizeChatRole(message.Role)
+		if role != "system" && role != "assistant" {
+			role = "user"
+		}
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		payloadMessages = append(payloadMessages, map[string]string{"role": role, "content": content})
+	}
+	if len(payloadMessages) == 0 {
+		return ChatResult{}, errors.New("chat messages are empty")
+	}
+
+	payload := map[string]interface{}{
+		"model":            modelName,
+		"messages":         payloadMessages,
+		"temperature":      parseTemperature(provider.config.Temperature),
+		"stream":           request.Stream,
+		"return_reasoning": request.ReturnReasoning,
+	}
+
+	endpoint := joinBaseURL(baseURL, "chat/completions")
+	body, err := provider.doJSON("POST", endpoint, payload, modelName, "openai-compatible", func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	})
+	if err != nil {
+		return ChatResult{}, err
+	}
+
+	var response struct {
+		Choices []struct {
+			Message struct {
+				Content          string `json:"content"`
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Error *struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		streamResult := parseStreamingChatResult(body)
+		if strings.TrimSpace(streamResult.Content) != "" {
+			return streamResult, nil
+		}
+		return ChatResult{}, errors.Wrap(err, "decode openai-compatible response")
+	}
+	if response.Error != nil {
+		return ChatResult{}, errors.Errorf("model api error: %s", response.Error.Message)
+	}
+	if len(response.Choices) == 0 || strings.TrimSpace(response.Choices[0].Message.Content) == "" {
+		streamResult := parseStreamingChatResult(body)
+		if strings.TrimSpace(streamResult.Content) != "" {
+			return streamResult, nil
+		}
+		return ChatResult{}, errors.New("model returned empty response")
+	}
+	return ChatResult{
+		Content:          strings.TrimSpace(response.Choices[0].Message.Content),
+		ReasoningContent: strings.TrimSpace(response.Choices[0].Message.ReasoningContent),
+	}, nil
+}
+
+func (provider *HTTPProvider) doJSON(method string, endpoint string, payload interface{}, modelName string, apiType string, applyHeaders func(*http.Request)) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, errors.Wrap(err, "encode model request")
+	}
+	req, err := http.NewRequest(method, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, errors.Wrap(err, "create model request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	applyHeaders(req)
+
+	start := time.Now()
+	logModelRequestStart(method, endpoint, provider.config.Provider, modelName, apiType)
+	resp, err := provider.client.Do(req)
+	if err != nil {
+		logModelRequestError(method, endpoint, provider.config.Provider, modelName, apiType, time.Since(start), err)
+		return nil, errors.Wrap(err, "call model api")
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		logModelRequestError(method, endpoint, provider.config.Provider, modelName, apiType, time.Since(start), err)
+		return nil, errors.Wrap(err, "read model response")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		logModelRequestDone(method, endpoint, provider.config.Provider, modelName, apiType, resp.StatusCode, time.Since(start), len(body))
+		return nil, errors.Errorf("model api http %d: %s", resp.StatusCode, truncateForError(string(body), 500))
+	}
+	logModelRequestDone(method, endpoint, provider.config.Provider, modelName, apiType, resp.StatusCode, time.Since(start), len(body))
+	return body, nil
+}
+
+func logModelRequestStart(method string, endpoint string, providerName string, modelName string, apiType string) {
+	if logger.Logger == nil {
+		return
+	}
+	logger.Info("External Model Request Started",
+		zap.String("method", method),
+		zap.String("endpoint", endpoint),
+		zap.String("provider", providerName),
+		zap.String("model", modelName),
+		zap.String("api_type", apiType),
+	)
+}
+
+func logModelRequestDone(method string, endpoint string, providerName string, modelName string, apiType string, statusCode int, took time.Duration, responseBytes int) {
+	if logger.Logger == nil {
+		return
+	}
+	logger.Info("External Model Request Finished",
+		zap.String("method", method),
+		zap.String("endpoint", endpoint),
+		zap.String("provider", providerName),
+		zap.String("model", modelName),
+		zap.String("api_type", apiType),
+		zap.Int("status_code", statusCode),
+		zap.Duration("took", took),
+		zap.Int("response_bytes", responseBytes),
+	)
+}
+
+func logModelRequestError(method string, endpoint string, providerName string, modelName string, apiType string, took time.Duration, err error) {
+	if logger.Logger == nil {
+		return
+	}
+	logger.Error("External Model Request Failed",
+		zap.String("method", method),
+		zap.String("endpoint", endpoint),
+		zap.String("provider", providerName),
+		zap.String("model", modelName),
+		zap.String("api_type", apiType),
+		zap.Duration("took", took),
+		zap.Error(err),
+	)
+}
+
+func isAnthropicProvider(providerName string, config model.UserModelConfig) bool {
+	if strings.Contains(providerName, "anthropic") || strings.Contains(providerName, "claude") {
+		return true
+	}
+	if providerName == "deepseek" {
+		return strings.Contains(strings.ToLower(config.BaseURL), "anthropic") ||
+			strings.Contains(strings.ToLower(config.AnthropicBaseURL), "anthropic")
+	}
+	if providerName != "" {
+		return false
+	}
+	return strings.TrimSpace(config.AnthropicBaseURL) != "" && strings.TrimSpace(config.AnthropicModel) != ""
+}
+
+func normalizeChatRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "assistant":
+		return "assistant"
+	case "system":
+		return "system"
+	default:
+		return "user"
+	}
+}
+
+func parseStreamingChatResult(body []byte) ChatResult {
+	lines := strings.Split(string(body), "\n")
+	var contentParts []string
+	var reasoningParts []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var event map[string]interface{}
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			continue
+		}
+		// 兼容 OpenAI/DeepSeek 流式返回：choices[].delta.content / reasoning_content。
+		if choices, ok := event["choices"].([]interface{}); ok {
+			for _, choice := range choices {
+				choiceMap, _ := choice.(map[string]interface{})
+				delta, _ := choiceMap["delta"].(map[string]interface{})
+				contentParts = appendIfPresent(contentParts, delta["content"])
+				reasoningParts = appendIfPresent(reasoningParts, delta["reasoning_content"])
+			}
+		}
+		// 兼容 Anthropic 流式返回：content_block_delta.delta.text / thinking。
+		if delta, ok := event["delta"].(map[string]interface{}); ok {
+			contentParts = appendIfPresent(contentParts, delta["text"])
+			reasoningParts = appendIfPresent(reasoningParts, delta["thinking"])
+			reasoningParts = appendIfPresent(reasoningParts, delta["reasoning_content"])
+		}
+		contentParts = appendIfPresent(contentParts, event["content"])
+		reasoningParts = appendIfPresent(reasoningParts, event["reasoning_content"])
+	}
+	return ChatResult{
+		Content:          strings.TrimSpace(strings.Join(contentParts, "")),
+		ReasoningContent: strings.TrimSpace(strings.Join(reasoningParts, "")),
+	}
+}
+
+func appendIfPresent(parts []string, value interface{}) []string {
+	text, ok := value.(string)
+	if !ok || text == "" {
+		return parts
+	}
+	return append(parts, text)
+}
+
+func parseTemperature(value string) float64 {
+	temperature, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0.7
+	}
+	return temperature
+}
+
+func parseMaxTokens(value string, fallback int) int {
+	maxTokens, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || maxTokens <= 0 {
+		return fallback
+	}
+	return maxTokens
+}
+
+func joinBaseURL(baseURL string, endpoint string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	endpoint = strings.TrimLeft(endpoint, "/")
+	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(endpoint, "v1/") {
+		endpoint = strings.TrimPrefix(endpoint, "v1/")
+	}
+	if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/openai") {
+		return base + "/" + endpoint
+	}
+	return base + "/" + endpoint
+}
+
+func truncateForError(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "..."
+}
+
+func (provider *MockProvider) Generate(request GenerationRequest) ([]GeneratedFile, error) {
+	title := strings.TrimSpace(request.Prompt)
+	if title == "" {
+		title = "AI Agent Picture"
+	}
+	escaped := html.EscapeString(title)
+	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%%" stop-color="#172554"/>
+      <stop offset="55%%" stop-color="#0f766e"/>
+      <stop offset="100%%" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg)"/>
+  <circle cx="1060" cy="140" r="90" fill="#fde68a" opacity="0.9"/>
+  <rect x="110" y="140" width="520" height="360" rx="28" fill="#ffffff" opacity="0.15"/>
+  <text x="150" y="255" fill="#ffffff" font-size="54" font-family="Arial, sans-serif" font-weight="700">AI Agent Image</text>
+  <foreignObject x="150" y="300" width="900" height="260">
+    <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial,sans-serif;color:white;font-size:34px;line-height:1.35;">%s</div>
+  </foreignObject>
+</svg>`, escaped)
+
+	page := fmt.Sprintf(`<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Agent Artifact</title>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; background: #f8fafc; color: #0f172a; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 48px; }
+    section { max-width: 840px; width: 100%%; border: 1px solid #cbd5e1; border-radius: 8px; background: white; padding: 32px; }
+    h1 { margin: 0 0 16px; font-size: 32px; }
+    p { font-size: 18px; line-height: 1.7; }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1>AI Agent HTML Artifact</h1>
+      <p>%s</p>
+    </section>
+  </main>
+</body>
+</html>`, escaped)
+
+	return []GeneratedFile{
+		{Name: "generated-image.svg", Kind: "image", MimeType: "image/svg+xml", Content: []byte(svg)},
+		{Name: "generated-page.html", Kind: "html", MimeType: "text/html; charset=utf-8", Content: []byte(page)},
+	}, nil
+}
+
+func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFile, error) {
+	return (&MockProvider{}).Generate(request)
+}

@@ -1,0 +1,6 @@
+﻿gin_agent_gorm/etc/**
+gin_agent_gorm/storage/logs/**
+node_modules/
+dist/
+.vscode/
+.idea/

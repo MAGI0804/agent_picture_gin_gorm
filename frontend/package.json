@@ -1,0 +1,19 @@
+{
+  "name": "yl-agent-picture-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4173"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "typescript": "^5.4.0",
+    "vite": "^5.0.0",
+    "vue": "^3.4.0",
+    "vue-router": "^5.0.7",
+    "vue-tsc": "^2.0.0"
+  }
+}
