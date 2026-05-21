@@ -34,14 +34,16 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		// 用户模型配置路由
 		agentGroup.GET("/settings/model-config", agentCtrl.GetModelConfig)  // GET /api/settings/model-config - 获取当前用户的模型配置
 		agentGroup.PUT("/settings/model-config", agentCtrl.SaveModelConfig) // PUT /api/settings/model-config - 保存用户的模型配置
+		agentGroup.GET("/settings/model-selection", agentCtrl.GetModelSelection)
+		agentGroup.PUT("/settings/model-selection", agentCtrl.SaveModelSelection)
 
 		// 全局模型配置路由（管理员功能）
 		agentGroup.GET("/model-configs", modelConfigCtrl.ListModelConfigs)             // GET /api/model-configs - 获取全局模型配置列表
+		agentGroup.GET("/model-configs/text-models", modelConfigCtrl.ListTextModels)   // GET /api/model-configs/text-models - 获取所有文本模型配置
+		agentGroup.GET("/model-configs/image-models", modelConfigCtrl.ListImageModels) // GET /api/model-configs/image-models - 获取所有图片模型配置
 		agentGroup.GET("/model-configs/:id", modelConfigCtrl.GetModelConfig)           // GET /api/model-configs/:id - 获取单个模型配置详情
 		agentGroup.POST("/model-configs", modelConfigCtrl.CreateModelConfig)           // POST /api/model-configs - 创建新的模型配置
 		agentGroup.PUT("/model-configs/:id", modelConfigCtrl.UpdateModelConfig)        // PUT /api/model-configs/:id - 更新模型配置
 		agentGroup.DELETE("/model-configs/:id", modelConfigCtrl.DeleteModelConfig)     // DELETE /api/model-configs/:id - 删除模型配置
-		agentGroup.GET("/model-configs/text-models", modelConfigCtrl.ListTextModels)   // GET /api/model-configs/text-models - 获取所有文本模型配置
-		agentGroup.GET("/model-configs/image-models", modelConfigCtrl.ListImageModels) // GET /api/model-configs/image-models - 获取所有图片模型配置
 	}
 }

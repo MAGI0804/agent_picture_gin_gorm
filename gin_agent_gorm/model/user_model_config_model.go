@@ -5,13 +5,15 @@ import "gorm.io/gorm"
 // UserModelConfig 表示用户绑定的模型配置。
 type UserModelConfig struct {
 	BaseModel
-	UserID      uint   `gorm:"column:user_id;uniqueIndex;not null" json:"user_id"`                 // 所属用户 ID。
-	Provider    string `gorm:"column:provider;size:64;not null;default:deepseek" json:"provider"`  // 模型供应商，例如 deepseek、openai。
-	ChatModel   string `gorm:"column:chat_model;size:128;not null" json:"chat_model"`              // 对话模型名称。
-	ImageModel  string `gorm:"column:image_model;size:128" json:"image_model"`                     // 图片模型名称。
-	BaseURL     string `gorm:"column:base_url;size:255" json:"base_url"`                           // 模型 API 地址。
-	APIKey      string `gorm:"column:api_key;type:text" json:"api_key"`                            // 模型 API Key。
-	Temperature string `gorm:"column:temperature;size:32;not null;default:0.7" json:"temperature"` // 模型温度参数。
+	UserID                     uint   `gorm:"column:user_id;uniqueIndex;not null" json:"user_id"`                                // 所属用户 ID。
+	SelectedTextModelConfigID  uint   `gorm:"column:selected_text_model_config_id;index" json:"selected_text_model_config_id"`   // 用户选择的全局文本模型配置 ID。
+	SelectedImageModelConfigID uint   `gorm:"column:selected_image_model_config_id;index" json:"selected_image_model_config_id"` // 用户选择的全局图片模型配置 ID。
+	Provider                   string `gorm:"column:provider;size:64;not null;default:deepseek" json:"provider"`                 // 模型供应商，例如 deepseek、openai。
+	ChatModel                  string `gorm:"column:chat_model;size:128;not null" json:"chat_model"`                             // 对话模型名称。
+	ImageModel                 string `gorm:"column:image_model;size:128" json:"image_model"`                                    // 图片模型名称。
+	BaseURL                    string `gorm:"column:base_url;size:255" json:"base_url"`                                          // 模型 API 地址。
+	APIKey                     string `gorm:"column:api_key;type:text" json:"api_key"`                                           // 模型 API Key。
+	Temperature                string `gorm:"column:temperature;size:32;not null;default:0.7" json:"temperature"`                // 模型温度参数。
 
 	AnthropicAuthToken          string `gorm:"column:anthropic_auth_token;type:text" json:"anthropic_auth_token"`                    // Anthropic 兼容鉴权 token。
 	AnthropicBaseURL            string `gorm:"column:anthropic_base_url;size:255" json:"anthropic_base_url"`                         // Anthropic 兼容 API 地址。

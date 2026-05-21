@@ -97,6 +97,20 @@ func (dao *AgentDAO) ListPendingQuestions(userID uint, conversationID uint) ([]m
 	return questions, err
 }
 
+// ListConversationQuestions queries recent follow-up questions for context assembly.
+func (dao *AgentDAO) ListConversationQuestions(
+	userID uint,
+	conversationID uint,
+	limit int,
+) ([]model.FollowUpQuestion, error) {
+	var questions []model.FollowUpQuestion
+	err := database.DB.Where("user_id = ? AND conversation_id = ?", userID, conversationID).
+		Order("id desc").
+		Limit(limit).
+		Find(&questions).Error
+	return questions, err
+}
+
 // CreateAgentRun 创建一次多 Agent 总任务。
 func (dao *AgentDAO) CreateAgentRun(run *model.AgentRun) error {
 	return database.DB.Create(run).Error
@@ -207,4 +221,35 @@ func (dao *AgentDAO) SaveUserModelConfig(config *model.UserModelConfig) error {
 		return database.DB.Save(config).Error
 	}
 	return database.DB.Create(config).Error
+}
+
+// SaveUserModelSelection creates or updates the user's selected global models.
+func (dao *AgentDAO) SaveUserModelSelection(
+	userID uint,
+	textModelConfigID uint,
+	imageModelConfigID uint,
+) error {
+	var exists model.UserModelConfig
+	err := database.DB.Where("user_id = ?", userID).First(&exists).Error
+	if err == nil {
+		return database.DB.Model(&model.UserModelConfig{}).
+			Where("id = ?", exists.ID).
+			Updates(map[string]interface{}{
+				"selected_text_model_config_id":  textModelConfigID,
+				"selected_image_model_config_id": imageModelConfigID,
+			}).Error
+	}
+
+	config := model.UserModelConfig{
+		UserID:                     userID,
+		SelectedTextModelConfigID:  textModelConfigID,
+		SelectedImageModelConfigID: imageModelConfigID,
+		Provider:                   "mock",
+		ChatModel:                  "mock-text",
+		ImageModel:                 "mock-image",
+		BaseURL:                    "",
+		APIKey:                     "",
+		Temperature:                "0.7",
+	}
+	return database.DB.Create(&config).Error
 }

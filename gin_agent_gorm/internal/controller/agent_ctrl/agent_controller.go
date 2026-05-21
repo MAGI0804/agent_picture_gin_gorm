@@ -67,6 +67,35 @@ func (ctrl *AgentController) SaveModelConfig(c *gin.Context) {
 	responses.New(c).ToResponse(gin.H{"model_config": config})
 }
 
+// GetModelSelection 获取当前用户可选模型列表和已选择的模型。
+// GET /api/settings/model-selection
+func (ctrl *AgentController) GetModelSelection(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	result, err := agent_svc.NewAgentService().GetModelSelection(userID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.DBError.WithDetails(err.Error()))
+		return
+	}
+	responses.New(c).ToResponse(result)
+}
+
+// SaveModelSelection 保存当前用户选择的文本模型和图片模型。
+// PUT /api/settings/model-selection
+func (ctrl *AgentController) SaveModelSelection(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	var request agent_request.SaveModelSelectionRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "请求参数错误")
+		return
+	}
+	result, err := agent_svc.NewAgentService().SaveModelSelection(userID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(result)
+}
+
 // ListConversations 获取当前用户的会话列表。
 // GET /api/conversations
 //

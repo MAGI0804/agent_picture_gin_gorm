@@ -165,6 +165,85 @@ func (svc *AgentService) GetModelConfig(userID uint) (model.UserModelConfig, err
 	}, nil
 }
 
+// GetModelSelection returns the user's selected global models plus model choices.
+func (svc *AgentService) GetModelSelection(userID uint) (map[string]interface{}, error) {
+	textModels, err := svc.ListTextModels()
+	if err != nil {
+		return nil, err
+	}
+	imageModels, err := svc.ListImageModels()
+	if err != nil {
+		return nil, err
+	}
+
+	userConfig, err := svc.GetModelConfig(userID)
+	if err != nil {
+		return nil, err
+	}
+	textModelID := userConfig.SelectedTextModelConfigID
+	imageModelID := userConfig.SelectedImageModelConfigID
+	if !containsModelConfigID(textModels, textModelID) && len(textModels) > 0 {
+		textModelID = textModels[0].ID
+	}
+	if !containsModelConfigID(imageModels, imageModelID) && len(imageModels) > 0 {
+		imageModelID = imageModels[0].ID
+	}
+
+	return map[string]interface{}{
+		"text_models":           textModels,
+		"image_models":          imageModels,
+		"text_model_config_id":  textModelID,
+		"image_model_config_id": imageModelID,
+	}, nil
+}
+
+func containsModelConfigID(configs []model.ModelConfig, id uint) bool {
+	if id == 0 {
+		return false
+	}
+	for _, config := range configs {
+		if config.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// SaveModelSelection stores the user's selected global text and image models.
+func (svc *AgentService) SaveModelSelection(
+	userID uint,
+	request agent_request.SaveModelSelectionRequest,
+) (map[string]interface{}, error) {
+	if request.TextModelConfigID != 0 {
+		config, err := svc.GetModelConfigByID(request.TextModelConfigID)
+		if err != nil {
+			return nil, errors.Wrap(err, "text model config not found")
+		}
+		if !config.IsTextModel {
+			return nil, errors.New("selected text model is not a text model")
+		}
+	}
+	if request.ImageModelConfigID != 0 {
+		config, err := svc.GetModelConfigByID(request.ImageModelConfigID)
+		if err != nil {
+			return nil, errors.Wrap(err, "image model config not found")
+		}
+		if !config.IsImageModel {
+			return nil, errors.New("selected image model is not an image model")
+		}
+	}
+
+	err := svc.dao.SaveUserModelSelection(
+		userID,
+		request.TextModelConfigID,
+		request.ImageModelConfigID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return svc.GetModelSelection(userID)
+}
+
 // SaveModelConfig 保存当前用户绑定的模型配置。
 func (svc *AgentService) SaveModelConfig(userID uint, request agent_request.SaveModelConfigRequest) (model.UserModelConfig, error) {
 	config := model.UserModelConfig{
@@ -232,7 +311,7 @@ func (svc *AgentService) SaveModelConfig(userID uint, request agent_request.Save
 }
 
 func (svc *AgentService) executeChatTurn(userID uint, conversation model.Conversation, userMessage model.Message, run model.AgentRun, request agent_request.SendMessageRequest) (map[string]interface{}, error) {
-	config, err := svc.resolveModelConfig(userID, request.ModelConfig)
+	config, err := svc.resolveRuntimeModelConfig(userID, "text")
 	if err != nil {
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
@@ -291,7 +370,14 @@ func (svc *AgentService) executeChatTurn(userID uint, conversation model.Convers
 		"follow_up_questions": []model.FollowUpQuestion{},
 		"agent_run":           run,
 		"agent_steps":         steps,
-		"conversation":        conversation,
+		"artifacts":           []model.Artifact{},
+		"model_output": map[string]interface{}{
+			"content":          reply,
+			"thinking_content": chatResult.ReasoningContent,
+			"finish_reason":    "stop",
+			"usage":            model.TokenUsage{},
+		},
+		"conversation": conversation,
 	}, nil
 }
 
@@ -319,30 +405,25 @@ func (svc *AgentService) buildChatMessages(userID uint, conversationID uint) ([]
 	return messages, nil
 }
 
-func (svc *AgentService) resolveModelConfig(userID uint, requestConfig map[string]interface{}) (model.UserModelConfig, error) {
+func (svc *AgentService) latestChatMessages(userID uint, conversationID uint, limit int) []ChatMessage {
+	messages, err := svc.buildChatMessages(userID, conversationID)
+	if err != nil {
+		return []ChatMessage{}
+	}
+	if len(messages) <= limit {
+		return messages
+	}
+	return messages[len(messages)-limit:]
+}
+
+func (svc *AgentService) resolveRuntimeModelConfig(userID uint, modelKind string) (model.UserModelConfig, error) {
 	config, err := svc.GetModelConfig(userID)
 	if err != nil {
 		return config, err
 	}
-	applyConfigOverride := func(field *string, key string) {
-		if value := stringConfigValue(requestConfig, key); value != "" {
-			*field = value
-		}
+	if selected, ok := svc.selectedGlobalModelConfig(config, modelKind); ok {
+		config = mergeUserConfigWithGlobalModel(config, selected, modelKind)
 	}
-	applyConfigOverride(&config.Provider, "provider")
-	applyConfigOverride(&config.ChatModel, "chat_model")
-	applyConfigOverride(&config.ImageModel, "image_model")
-	applyConfigOverride(&config.BaseURL, "base_url")
-	applyConfigOverride(&config.APIKey, "api_key")
-	applyConfigOverride(&config.Temperature, "temperature")
-	applyConfigOverride(&config.AnthropicAuthToken, "anthropic_auth_token")
-	applyConfigOverride(&config.AnthropicBaseURL, "anthropic_base_url")
-	applyConfigOverride(&config.AnthropicModel, "anthropic_model")
-	applyConfigOverride(&config.AnthropicDefaultOpusModel, "anthropic_default_opus_model")
-	applyConfigOverride(&config.AnthropicDefaultSonnetModel, "anthropic_default_sonnet_model")
-	applyConfigOverride(&config.AnthropicDefaultHaikuModel, "anthropic_default_haiku_model")
-	applyConfigOverride(&config.ClaudeCodeSubagentModel, "claude_code_subagent_model")
-	applyConfigOverride(&config.ClaudeCodeMaxOutputTokens, "claude_code_max_output_tokens")
 
 	if strings.TrimSpace(config.Provider) == "" {
 		config.Provider = "deepseek-anthropic"
@@ -365,7 +446,87 @@ func (svc *AgentService) resolveModelConfig(userID uint, requestConfig map[strin
 	return config, nil
 }
 
-func stringConfigValue(values map[string]interface{}, key string) string {
+func (svc *AgentService) selectedGlobalModelConfig(
+	userConfig model.UserModelConfig,
+	modelKind string,
+) (model.ModelConfig, bool) {
+	selectedID := userConfig.SelectedTextModelConfigID
+	if modelKind == "image" {
+		selectedID = userConfig.SelectedImageModelConfigID
+	}
+	if selectedID == 0 {
+		return model.ModelConfig{}, false
+	}
+	config, err := svc.GetModelConfigByID(selectedID)
+	if err != nil {
+		return model.ModelConfig{}, false
+	}
+	if modelKind == "image" && !config.IsImageModel {
+		return model.ModelConfig{}, false
+	}
+	if modelKind != "image" && !config.IsTextModel {
+		return model.ModelConfig{}, false
+	}
+	return config, true
+}
+
+func mergeUserConfigWithGlobalModel(
+	userConfig model.UserModelConfig,
+	globalConfig model.ModelConfig,
+	modelKind string,
+) model.UserModelConfig {
+	config := userConfig
+	provider := configInfoString(globalConfig.ConfigInfo, "provider")
+	if provider == "" {
+		provider = "mock"
+	}
+	baseURL := configInfoString(globalConfig.ConfigInfo, "base_url")
+	if baseURL == "" {
+		baseURL = globalConfig.RequestURL
+	}
+	apiKey := configInfoString(globalConfig.ConfigInfo, "api_key")
+	temperature := configInfoString(globalConfig.ConfigInfo, "temperature")
+	if temperature == "" {
+		temperature = config.Temperature
+	}
+	if temperature == "" {
+		temperature = "0.7"
+	}
+
+	config.Provider = provider
+	config.BaseURL = baseURL
+	config.APIKey = apiKey
+	config.Temperature = temperature
+	if modelKind == "image" {
+		config.ImageModel = globalConfig.ModelName
+	} else {
+		config.ChatModel = globalConfig.ModelName
+		config.AnthropicModel = configInfoString(globalConfig.ConfigInfo, "anthropic_model")
+		if config.AnthropicModel == "" {
+			config.AnthropicModel = globalConfig.ModelName
+		}
+	}
+
+	config.AnthropicAuthToken = configInfoString(globalConfig.ConfigInfo, "anthropic_auth_token")
+	if config.AnthropicAuthToken == "" {
+		config.AnthropicAuthToken = apiKey
+	}
+	config.AnthropicBaseURL = configInfoString(globalConfig.ConfigInfo, "anthropic_base_url")
+	if config.AnthropicBaseURL == "" {
+		config.AnthropicBaseURL = baseURL
+	}
+	config.AnthropicDefaultOpusModel = configInfoString(globalConfig.ConfigInfo, "anthropic_default_opus_model")
+	config.AnthropicDefaultSonnetModel = configInfoString(globalConfig.ConfigInfo, "anthropic_default_sonnet_model")
+	config.AnthropicDefaultHaikuModel = configInfoString(globalConfig.ConfigInfo, "anthropic_default_haiku_model")
+	config.ClaudeCodeSubagentModel = configInfoString(globalConfig.ConfigInfo, "claude_code_subagent_model")
+	config.ClaudeCodeMaxOutputTokens = configInfoString(globalConfig.ConfigInfo, "claude_code_max_output_tokens")
+	if config.ClaudeCodeMaxOutputTokens == "" {
+		config.ClaudeCodeMaxOutputTokens = "4096"
+	}
+	return config
+}
+
+func configInfoString(values model.JSONMap, key string) string {
 	if len(values) == 0 {
 		return ""
 	}
@@ -392,27 +553,47 @@ func modelCallTarget(config model.UserModelConfig) string {
 
 // createClarifyingTurn 生成补充问题轮次。
 func (svc *AgentService) createClarifyingTurn(userID uint, conversation model.Conversation, userMessage model.Message, run model.AgentRun, content string) (map[string]interface{}, error) {
-	_ = svc.createStepWithThinking(run.ID, "planner_agent", content, "需要先确认图片或 HTML 产物的目标、风格和尺寸。", "判断当前是图片生成任务，信息不足时先生成补充问题。", "Planner 未调用外部模型，reasoning_content 为空。")
+	questionResult, err := svc.generateFollowUpQuestions(userID, content)
+	if err != nil {
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
+		return nil, err
+	}
+	questionTexts := parseQuestionLines(questionResult.Content)
+	_ = svc.createStepWithThinking(
+		run.ID,
+		"planner_agent",
+		content,
+		strings.Join(questionTexts, "\n"),
+		"调用当前文本模型判断图片任务还缺少哪些关键信息，并生成有针对性的追问。",
+		questionResult.ReasoningContent,
+	)
 	assistantMessage := model.Message{
 		ConversationID: conversation.ID,
 		UserID:         userID,
 		Role:           "assistant",
 		InputType:      "follow_up_questions",
-		Content:        "我需要先确认几个细节，然后再进入多 Agent 生成流程。",
+		Content:        "我需要先确认几个细节，然后再进入多 Agent 生成流程。\n" + strings.Join(questionTexts, "\n"),
 		AgentRunID:     run.ID,
 	}
 	if err := svc.dao.CreateMessage(&assistantMessage); err != nil {
 		return nil, err
 	}
 
-	questions := []model.FollowUpQuestion{
-		{ConversationID: conversation.ID, MessageID: assistantMessage.ID, UserID: userID, Question: "希望生成图片、HTML 页面，还是两者都生成？", Status: "pending"},
-		{ConversationID: conversation.ID, MessageID: assistantMessage.ID, UserID: userID, Question: "请补充风格、尺寸、用途或必须出现的元素。", Status: "pending"},
+	questions := make([]model.FollowUpQuestion, 0, len(questionTexts))
+	for _, questionText := range questionTexts {
+		questions = append(questions, model.FollowUpQuestion{
+			ConversationID: conversation.ID,
+			MessageID:      assistantMessage.ID,
+			UserID:         userID,
+			Question:       questionText,
+			Status:         "pending",
+		})
 	}
 	if err := svc.dao.CreateFollowUpQuestions(questions); err != nil {
 		return nil, err
 	}
-	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "waiting_questions"})
+	run.Status = "waiting_questions"
+	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": run.Status})
 	steps, _ := svc.dao.ListAgentSteps(userID, run.ID)
 
 	return map[string]interface{}{
@@ -421,23 +602,104 @@ func (svc *AgentService) createClarifyingTurn(userID uint, conversation model.Co
 		"follow_up_questions": questions,
 		"agent_run":           run,
 		"agent_steps":         steps,
-		"conversation":        conversation,
+		"model_output": map[string]interface{}{
+			"content":          assistantMessage.Content,
+			"thinking_content": questionResult.ReasoningContent,
+			"finish_reason":    "stop",
+			"usage":            model.TokenUsage{},
+		},
+		"conversation": conversation,
 	}, nil
+}
+
+func (svc *AgentService) generateFollowUpQuestions(userID uint, content string) (ChatResult, error) {
+	config, err := svc.resolveRuntimeModelConfig(userID, "text")
+	if err != nil {
+		return ChatResult{}, err
+	}
+	systemPrompt := strings.Join([]string{
+		"You are the planner agent for an image generation workflow.",
+		"Ask up to 3 targeted Chinese follow-up questions before generation.",
+		"Questions must focus on goal, aspect ratio or size, style, required elements, and avoided elements.",
+		"Return one question per line. Do not add numbering explanations or markdown.",
+	}, " ")
+	return NewProviderWithConfig(config).Chat(ChatRequest{
+		System: systemPrompt,
+		Messages: []ChatMessage{
+			{Role: "user", Content: content},
+		},
+		ModelConfig:     config,
+		Stream:          true,
+		ReturnReasoning: true,
+	})
+}
+
+func parseQuestionLines(content string) []string {
+	lines := strings.Split(content, "\n")
+	questions := make([]string, 0, 3)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		line = strings.TrimLeft(line, "-*0123456789.、)） ")
+		if line == "" {
+			continue
+		}
+		questions = append(questions, line)
+		if len(questions) == 3 {
+			break
+		}
+	}
+	if len(questions) > 0 {
+		return questions
+	}
+	return []string{
+		"这张图的核心用途是什么，例如头像、海报、产品图还是页面配图？",
+		"希望使用什么尺寸或比例，例如 1:1、16:9、9:16？",
+		"必须出现或必须避免哪些元素、文字、风格？",
+	}
 }
 
 // executeGeneration 执行固定多 Agent DAG，并保存生成产物。
 func (svc *AgentService) executeGeneration(userID uint, conversation model.Conversation, userMessage model.Message, run model.AgentRun, content string, request agent_request.SendMessageRequest) (map[string]interface{}, error) {
-	config, err := svc.resolveModelConfig(userID, request.ModelConfig)
+	config, err := svc.resolveRuntimeModelConfig(userID, "image")
 	if err != nil {
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
 	}
 	memories, _ := svc.dao.ListContextMemories(userID, conversation.ID, 5)
-	contextBytes, _ := json.Marshal(memories)
+	questions, _ := svc.dao.ListConversationQuestions(userID, conversation.ID, 20)
+	contextPackage := map[string]interface{}{
+		"short_messages": svc.latestChatMessages(userID, conversation.ID, 20),
+		"task": map[string]interface{}{
+			"task_type":              normalizeTaskType(request.TaskType),
+			"intent":                 run.Intent,
+			"answered_question_ids":  request.AnsweredQuestionIDs,
+			"current_agent_run_id":   run.ID,
+			"trigger_message_id":     userMessage.ID,
+			"follow_up_question_set": questions,
+		},
+		"long_term_memories": memories,
+	}
+	contextBytes, _ := json.Marshal(contextPackage)
 	_ = svc.createStepWithThinking(run.ID, "context_agent", string(contextBytes), "已读取最近上下文和长期记忆。", "检索当前会话记忆、用户偏好和相关历史任务。", "")
 
-	prompt := svc.composePrompt(conversation.ID, content, memories)
-	_ = svc.createStepWithThinking(run.ID, "prompt_agent", content, prompt, "把补充问题答案、历史上下文和任务类型整理为生成提示词。", "")
+	rawPrompt := svc.composePrompt(conversation.ID, content, memories, questions)
+	promptResult, err := svc.refineGenerationPrompt(userID, normalizeTaskType(request.TaskType), rawPrompt)
+	if err != nil {
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
+		return nil, err
+	}
+	prompt := promptResult.Content
+	if strings.TrimSpace(prompt) == "" {
+		prompt = rawPrompt
+	}
+	_ = svc.createStepWithThinking(
+		run.ID,
+		"prompt_agent",
+		rawPrompt,
+		prompt,
+		"调用当前文本模型，把用户需求、追问回答和上下文整理成图片模型可执行提示词。",
+		promptResult.ReasoningContent,
+	)
 
 	files, err := NewProviderWithConfig(config).Generate(GenerationRequest{
 		Prompt:          prompt,
@@ -503,17 +765,73 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 		Score:          10,
 	}
 	_ = svc.dao.CreateContextMemory(&memory)
-	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "completed"})
+	requirementMemory := model.ContextMemory{
+		ConversationID: conversation.ID,
+		UserID:         userID,
+		Kind:           "artifact_requirement",
+		Content:        "生成提示词：" + prompt,
+		Score:          8,
+	}
+	_ = svc.dao.CreateContextMemory(&requirementMemory)
+	if preference := extractPreference(content); preference != "" {
+		preferenceMemory := model.ContextMemory{
+			ConversationID: conversation.ID,
+			UserID:         userID,
+			Kind:           "preference",
+			Content:        preference,
+			Score:          12,
+		}
+		_ = svc.dao.CreateContextMemory(&preferenceMemory)
+	}
+	run.Status = "completed"
+	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": run.Status})
 	steps, _ := svc.dao.ListAgentSteps(userID, run.ID)
 
 	return map[string]interface{}{
-		"user_message":      userMessage,
-		"assistant_message": assistantMessage,
-		"artifacts":         artifacts,
-		"agent_run":         run,
-		"agent_steps":       steps,
-		"conversation":      conversation,
+		"user_message":        userMessage,
+		"assistant_message":   assistantMessage,
+		"follow_up_questions": []model.FollowUpQuestion{},
+		"artifacts":           artifacts,
+		"agent_run":           run,
+		"agent_steps":         steps,
+		"model_output": map[string]interface{}{
+			"artifacts":        artifacts,
+			"thinking_content": promptResult.ReasoningContent,
+			"finish_reason":    "stop",
+			"image_width":      0,
+			"image_height":     0,
+			"image_url":        "",
+			"image_base64":     "",
+		},
+		"conversation": conversation,
 	}, nil
+}
+
+func (svc *AgentService) refineGenerationPrompt(
+	userID uint,
+	taskType string,
+	rawPrompt string,
+) (ChatResult, error) {
+	config, err := svc.resolveRuntimeModelConfig(userID, "text")
+	if err != nil {
+		return ChatResult{}, err
+	}
+	systemPrompt := strings.Join([]string{
+		"You are the prompt agent for an image AI Agent workflow.",
+		"Convert the user's Chinese requirements, follow-up answers, and context into a concise final generation prompt.",
+		"Return only the final prompt. Include subject, composition, style, color, aspect ratio, required elements, and avoid-list when present.",
+		"Do not say you cannot generate images. Do not include markdown fences.",
+	}, " ")
+	userPrompt := fmt.Sprintf("task_type=%s\n\n%s", taskType, rawPrompt)
+	return NewProviderWithConfig(config).Chat(ChatRequest{
+		System: systemPrompt,
+		Messages: []ChatMessage{
+			{Role: "user", Content: userPrompt},
+		},
+		ModelConfig:     config,
+		Stream:          true,
+		ReturnReasoning: true,
+	})
 }
 
 // createStep 记录一个 Agent 子步骤。
@@ -570,6 +888,10 @@ func normalizeTaskType(taskType string) string {
 	switch strings.TrimSpace(taskType) {
 	case "image_generation":
 		return "image_generation"
+	case "html_generation":
+		return "html_generation"
+	case "mixed_generation":
+		return "mixed_generation"
 	default:
 		return "text_chat"
 	}
@@ -593,25 +915,53 @@ func (svc *AgentService) detectIntent(content string, taskType string) string {
 		return "text_chat"
 	}
 	if taskType == "image_generation" {
-		return "image"
+		return "image_generation"
+	}
+	if taskType == "html_generation" {
+		return "html_generation"
+	}
+	if taskType == "mixed_generation" {
+		return "mixed_generation"
 	}
 	lower := strings.ToLower(content)
 	if strings.Contains(lower, "html") || strings.Contains(content, "页面") {
-		return "html"
+		return "html_generation"
 	}
 	if strings.Contains(content, "图") || strings.Contains(lower, "image") {
-		return "image"
+		return "image_generation"
 	}
-	return "mixed"
+	return "mixed_generation"
 }
 
 // composePrompt 将当前输入和历史记忆组合为 Provider 提示词。
-func (svc *AgentService) composePrompt(conversationID uint, content string, memories []model.ContextMemory) string {
+func (svc *AgentService) composePrompt(
+	conversationID uint,
+	content string,
+	memories []model.ContextMemory,
+	questions []model.FollowUpQuestion,
+) string {
 	parts := []string{fmt.Sprintf("conversation:%d", conversationID), content}
+	for _, question := range questions {
+		if strings.TrimSpace(question.Answer) == "" {
+			continue
+		}
+		parts = append(parts, "补充问题："+question.Question)
+		parts = append(parts, "用户回答："+question.Answer)
+	}
 	for _, memory := range memories {
 		parts = append(parts, memory.Content)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n"))
+}
+
+func extractPreference(content string) string {
+	keywords := []string{"喜欢", "偏好", "风格", "不要", "必须", "希望"}
+	for _, keyword := range keywords {
+		if strings.Contains(content, keyword) {
+			return "用户偏好：" + strings.TrimSpace(content)
+		}
+	}
+	return ""
 }
 
 // IsNotFound 判断错误是否为 GORM 记录不存在。

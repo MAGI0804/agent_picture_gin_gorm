@@ -2,6 +2,7 @@ package agent_svc
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -538,5 +539,180 @@ func (provider *MockProvider) Generate(request GenerationRequest) ([]GeneratedFi
 }
 
 func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFile, error) {
-	return (&MockProvider{}).Generate(request)
+	providerName := strings.ToLower(strings.TrimSpace(provider.config.Provider))
+	modelName := strings.TrimSpace(provider.config.ImageModel)
+	apiKey := strings.TrimSpace(provider.config.APIKey)
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(provider.config.AnthropicAuthToken)
+	}
+	baseURL := strings.TrimSpace(provider.config.BaseURL)
+	if modelName == "" || apiKey == "" || baseURL == "" {
+		return (&MockProvider{}).Generate(request)
+	}
+
+	if isDashScopeProvider(providerName, baseURL) {
+		return provider.generateDashScopeImage(request, baseURL, apiKey, modelName)
+	}
+
+	payload := map[string]interface{}{
+		"model":           modelName,
+		"prompt":          request.Prompt,
+		"n":               1,
+		"size":            "1024x1024",
+		"response_format": "b64_json",
+	}
+	endpoint := joinBaseURL(baseURL, "images/generations")
+	body, err := provider.doJSON("POST", endpoint, payload, modelName, "image-openai-compatible", func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := provider.parseOpenAIImageFile(body, request.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedFile{file}, nil
+}
+
+func (provider *HTTPProvider) generateDashScopeImage(
+	request GenerationRequest,
+	baseURL string,
+	apiKey string,
+	modelName string,
+) ([]GeneratedFile, error) {
+	payload := map[string]interface{}{
+		"model": modelName,
+		"input": map[string]interface{}{
+			"prompt": request.Prompt,
+		},
+		"parameters": map[string]interface{}{
+			"size": "1024*1024",
+			"n":    1,
+		},
+	}
+	endpoint := joinBaseURL(baseURL, "services/aigc/text2image/image-synthesis")
+	body, err := provider.doJSON("POST", endpoint, payload, modelName, "image-dashscope", func(req *http.Request) {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("X-DashScope-Async", "disable")
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := provider.parseDashScopeImageFile(body)
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedFile{file}, nil
+}
+
+func isDashScopeProvider(providerName string, baseURL string) bool {
+	return strings.Contains(providerName, "dashscope") ||
+		strings.Contains(providerName, "qwen") ||
+		strings.Contains(strings.ToLower(baseURL), "dashscope")
+}
+
+func (provider *HTTPProvider) parseOpenAIImageFile(body []byte, prompt string) (GeneratedFile, error) {
+	var response struct {
+		Data []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "decode image response")
+	}
+	if response.Error != nil {
+		return GeneratedFile{}, errors.Errorf("image model api error: %s", response.Error.Message)
+	}
+	if len(response.Data) == 0 {
+		return GeneratedFile{}, errors.New("image model returned empty data")
+	}
+	if strings.TrimSpace(response.Data[0].B64JSON) != "" {
+		content, err := base64.StdEncoding.DecodeString(response.Data[0].B64JSON)
+		if err != nil {
+			return GeneratedFile{}, errors.Wrap(err, "decode generated image")
+		}
+		return GeneratedFile{
+			Name:     "generated-image.png",
+			Kind:     "image",
+			MimeType: "image/png",
+			Content:  content,
+		}, nil
+	}
+	if strings.TrimSpace(response.Data[0].URL) != "" {
+		return provider.downloadGeneratedImage(response.Data[0].URL)
+	}
+	return GeneratedFile{}, errors.New("image model returned no image payload")
+}
+
+func (provider *HTTPProvider) parseDashScopeImageFile(body []byte) (GeneratedFile, error) {
+	var response struct {
+		Output struct {
+			Results []struct {
+				URL string `json:"url"`
+			} `json:"results"`
+			TaskStatus string `json:"task_status"`
+		} `json:"output"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "decode dashscope image response")
+	}
+	if response.Code != "" {
+		return GeneratedFile{}, errors.Errorf("dashscope image model api error: %s", response.Message)
+	}
+	if len(response.Output.Results) == 0 || strings.TrimSpace(response.Output.Results[0].URL) == "" {
+		return GeneratedFile{}, errors.New("dashscope image model returned no image url")
+	}
+	return provider.downloadGeneratedImage(response.Output.Results[0].URL)
+}
+
+func (provider *HTTPProvider) downloadGeneratedImage(rawURL string) (GeneratedFile, error) {
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "create image download request")
+	}
+	resp, err := provider.client.Do(req)
+	if err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "download generated image")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return GeneratedFile{}, errors.Errorf("download generated image http %d", resp.StatusCode)
+	}
+	content, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "read generated image")
+	}
+	mimeType := resp.Header.Get("Content-Type")
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "image/png"
+	}
+	name := "generated-image" + imageExtension(mimeType)
+	return GeneratedFile{
+		Name:     name,
+		Kind:     "image",
+		MimeType: mimeType,
+		Content:  content,
+	}, nil
+}
+
+func imageExtension(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0])) {
+	case "image/jpeg", "image/jpg":
+		return ".jpg"
+	case "image/webp":
+		return ".webp"
+	case "image/svg+xml":
+		return ".svg"
+	default:
+		return ".png"
+	}
 }

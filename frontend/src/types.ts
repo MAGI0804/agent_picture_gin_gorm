@@ -20,6 +20,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   input_type: string
   content: string
+  thinking_content?: string
   agent_run_id: number
   created_at: number
   updated_at: number
@@ -49,6 +50,25 @@ export interface Artifact {
   hash: string
 }
 
+export interface GlobalModelConfig {
+  id: number
+  model_name: string
+  request_url: string
+  is_text_model: boolean
+  is_image_model: boolean
+  support_thinking: boolean
+  config_info?: Record<string, unknown>
+  created_at?: number
+  updated_at?: number
+}
+
+export interface ModelSelection {
+  text_models: GlobalModelConfig[]
+  image_models: GlobalModelConfig[]
+  text_model_config_id: number
+  image_model_config_id: number
+}
+
 export interface AgentRun {
   id: number
   conversation_id: number
@@ -72,6 +92,8 @@ export interface AgentStep {
 }
 
 export interface ModelConfig {
+  selected_text_model_config_id?: number
+  selected_image_model_config_id?: number
   provider: string
   chat_model: string
   image_model: string

@@ -18,6 +18,12 @@ type SaveModelConfigRequest struct {
 	ClaudeCodeMaxOutputTokens   string `json:"claude_code_max_output_tokens" form:"claude_code_max_output_tokens"`
 }
 
+// SaveModelSelectionRequest saves the user's selected global text and image models.
+type SaveModelSelectionRequest struct {
+	TextModelConfigID  uint `json:"text_model_config_id" form:"text_model_config_id"`
+	ImageModelConfigID uint `json:"image_model_config_id" form:"image_model_config_id"`
+}
+
 // GlobalSaveModelConfigRequest saves the global model configuration.
 type GlobalSaveModelConfigRequest struct {
 	ID              uint                   `json:"id" form:"id"`

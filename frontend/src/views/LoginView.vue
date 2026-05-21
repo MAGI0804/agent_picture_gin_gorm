@@ -41,6 +41,9 @@ async function login() {
   })
   setToken(data.token)
   authHint.value = '登录成功，正在进入对话页...'
-  await router.push('/chat')
+  const redirect = typeof router.currentRoute.value.query.redirect === 'string'
+    ? router.currentRoute.value.query.redirect
+    : '/chat'
+  await router.push(redirect)
 }
 </script>

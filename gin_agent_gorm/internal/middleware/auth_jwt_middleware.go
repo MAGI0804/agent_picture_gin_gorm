@@ -23,7 +23,7 @@ func AuthJWT() gin.HandlerFunc {
 
 		// jwt 解析失败
 		if err != nil {
-			response.ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+			response.ToErrorResponse(errcode.Unauthorized.WithDetails(err.Error()), err.Error())
 			c.Abort() // 终止后续中间件和处理函数的执行
 			return
 		}
