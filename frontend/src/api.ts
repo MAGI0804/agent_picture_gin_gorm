@@ -72,3 +72,21 @@ export async function downloadArtifact(id: number, name: string) {
   link.remove()
   URL.revokeObjectURL(url)
 }
+
+export interface OptimizePromptResult {
+  original_prompt: string
+  optimized_prompt: string
+  target_length: number
+  original_length: number
+  optimized_length: number
+}
+
+export async function optimizePrompt(content: string, targetLength: number = 700) {
+  return apiFetch<OptimizePromptResult>('/api/prompts/optimize', {
+    method: 'POST',
+    body: JSON.stringify({
+      content,
+      target_length: targetLength,
+    }),
+  })
+}

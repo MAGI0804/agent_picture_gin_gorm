@@ -6,10 +6,17 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"go.uber.org/zap"
 
 	"gin-biz-web-api/internal/requests/agent_request"
+	"gin-biz-web-api/internal/service/model_request"
 	"gin-biz-web-api/model"
+	"gin-biz-web-api/pkg/database"
+	"gin-biz-web-api/pkg/logger"
 )
+
+const imagePromptTargetLength = 750
+const PromptTooLongMessage = "提示词太长，请重新输入或使用智能优化功能"
 
 // executeChatTurn 执行文本聊天轮次。
 func (svc *AgentService) executeChatTurn(userID uint, conversation model.Conversation, userMessage model.Message, run model.AgentRun, request agent_request.SendMessageRequest) (map[string]interface{}, error) {
@@ -196,7 +203,7 @@ func (svc *AgentService) permittedGlobalModelConfig(
 }
 
 func modelConfigProvider(config model.ModelConfig) string {
-	provider := strings.ToLower(configInfoFirstString(config.ConfigInfo, "provider", "vendor", "api_type", "type"))
+	provider := strings.ToLower(configInfoFirstString(config.ConfigInfo, "provider", "vendor", "api_type", "type", "provider name", "api type"))
 	if provider != "" {
 		return provider
 	}
@@ -228,11 +235,13 @@ func mergeUserConfigWithGlobalModel(
 	config := userConfig
 	config.RuntimeConfig = globalConfig.ConfigInfo
 	provider := modelConfigProvider(globalConfig)
-	baseURL := configInfoFirstString(globalConfig.ConfigInfo, "base_url", "baseURL", "url", "endpoint")
+	baseURL := configInfoFirstString(globalConfig.ConfigInfo, "base_url", "baseURL", "url", "endpoint", "base url")
 	if baseURL == "" {
 		baseURL = globalConfig.RequestURL
 	}
-	apiKey := configInfoFirstString(globalConfig.ConfigInfo, "api_key", "apiKey", "key", "token", "access_token", "auth_token", "anthropic_auth_token")
+	apiKey := configInfoFirstString(globalConfig.ConfigInfo,
+		"api_key", "apiKey", "key", "token", "access_token", "auth_token", "anthropic_auth_token",
+		"api key", "access key", "secret access key", "secret key")
 	temperature := configInfoFirstString(globalConfig.ConfigInfo, "temperature", "temp")
 	if temperature == "" {
 		temperature = config.Temperature
@@ -249,17 +258,17 @@ func mergeUserConfigWithGlobalModel(
 		config.ImageModel = globalConfig.ModelName
 	} else {
 		config.ChatModel = globalConfig.ModelName
-		config.AnthropicModel = configInfoFirstString(globalConfig.ConfigInfo, "anthropic_model", "anthropicModel")
+		config.AnthropicModel = configInfoFirstString(globalConfig.ConfigInfo, "anthropic_model", "anthropicModel", "anthropic model")
 		if config.AnthropicModel == "" {
 			config.AnthropicModel = globalConfig.ModelName
 		}
 	}
 
-	config.AnthropicAuthToken = configInfoFirstString(globalConfig.ConfigInfo, "anthropic_auth_token", "anthropicAuthToken")
+	config.AnthropicAuthToken = configInfoFirstString(globalConfig.ConfigInfo, "anthropic_auth_token", "anthropicAuthToken", "anthropic auth token")
 	if config.AnthropicAuthToken == "" {
 		config.AnthropicAuthToken = apiKey
 	}
-	config.AnthropicBaseURL = configInfoFirstString(globalConfig.ConfigInfo, "anthropic_base_url", "anthropicBaseURL")
+	config.AnthropicBaseURL = configInfoFirstString(globalConfig.ConfigInfo, "anthropic_base_url", "anthropicBaseURL", "anthropic base url")
 	if config.AnthropicBaseURL == "" {
 		config.AnthropicBaseURL = baseURL
 	}
@@ -278,16 +287,35 @@ func configInfoString(values model.JSONMap, key string) string {
 	if len(values) == 0 {
 		return ""
 	}
-	value, ok := values[key]
-	if !ok || value == nil {
-		return ""
+
+	// 先尝试精确匹配
+	if value, ok := values[key]; ok && value != nil {
+		switch typed := value.(type) {
+		case string:
+			return strings.TrimSpace(typed)
+		default:
+			return strings.TrimSpace(fmt.Sprint(typed))
+		}
 	}
-	switch typed := value.(type) {
-	case string:
-		return strings.TrimSpace(typed)
-	default:
-		return strings.TrimSpace(fmt.Sprint(typed))
+
+	// 尝试大小写不敏感匹配（包括空格处理）
+	targetKeyLower := strings.ToLower(strings.ReplaceAll(key, " ", ""))
+	for k, value := range values {
+		if value == nil {
+			continue
+		}
+		kLower := strings.ToLower(strings.ReplaceAll(k, " ", ""))
+		if kLower == targetKeyLower {
+			switch typed := value.(type) {
+			case string:
+				return strings.TrimSpace(typed)
+			default:
+				return strings.TrimSpace(fmt.Sprint(typed))
+			}
+		}
 	}
+
+	return ""
 }
 
 func configInfoFirstString(values model.JSONMap, keys ...string) string {
@@ -415,12 +443,122 @@ func parseQuestionLines(content string) []string {
 	}
 }
 
+func (svc *AgentService) prepareGenerationPromptInput(
+	userID uint,
+	userMessage model.Message,
+	run model.AgentRun,
+	content string,
+	request agent_request.SendMessageRequest,
+) (string, string, string, error) {
+	optimizedPrompt := strings.TrimSpace(request.OptimizedPrompt)
+	if request.IsOptimized && optimizedPrompt != "" {
+		return optimizedPrompt, optimizedPrompt, "用户确认使用智能优化后的提示词。", nil
+	}
+
+	if len([]rune(content)) <= imagePromptTargetLength {
+		return content, "", "", nil
+	}
+
+	optimizedPrompt, err := svc.optimizePromptWithDeepseek(userID, content, imagePromptTargetLength, "shorten")
+	if err != nil || strings.TrimSpace(optimizedPrompt) == "" || len([]rune(optimizedPrompt)) > imagePromptTargetLength {
+		logger.Warn("[Prompt Agent] 图片提示词过长且自动优化失败",
+			zap.Uint("user_id", userID),
+			zap.Uint("message_id", userMessage.ID),
+			zap.Uint("run_id", run.ID),
+			zap.Int("original_length", len([]rune(content))),
+			zap.Error(err),
+		)
+		return "", "", "", errors.New(PromptTooLongMessage)
+	}
+
+	optimizedPrompt = strings.TrimSpace(optimizedPrompt)
+	if updateErr := svc.dao.UpdateMessageOptimization(userMessage.ID, true, optimizedPrompt); updateErr != nil {
+		logger.Warn("[Prompt Agent] 更新消息优化信息失败", zap.Uint("message_id", userMessage.ID), zap.Error(updateErr))
+	}
+	if updateErr := svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+		"is_optimized":     true,
+		"optimized_prompt": optimizedPrompt,
+	}); updateErr != nil {
+		logger.Warn("[Prompt Agent] 更新任务优化信息失败", zap.Uint("run_id", run.ID), zap.Error(updateErr))
+	}
+
+	return optimizedPrompt, optimizedPrompt, "图片提示词超过长度限制，已自动调用 deepseek-v4-pro 缩短到约 700 字符。", nil
+}
+
+func (svc *AgentService) ensureImagePromptLength(
+	userID uint,
+	userMessage model.Message,
+	run model.AgentRun,
+	prompt string,
+) (string, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return "", errors.New(PromptTooLongMessage)
+	}
+	if len([]rune(prompt)) <= imagePromptTargetLength {
+		return prompt, nil
+	}
+
+	optimizedPrompt, err := svc.optimizePromptWithDeepseek(userID, prompt, imagePromptTargetLength, "shorten")
+	if err != nil || strings.TrimSpace(optimizedPrompt) == "" || len([]rune(optimizedPrompt)) > imagePromptTargetLength {
+		logger.Warn("[Prompt Agent] 最终图片提示词过长且缩短失败",
+			zap.Uint("user_id", userID),
+			zap.Uint("message_id", userMessage.ID),
+			zap.Uint("run_id", run.ID),
+			zap.Int("prompt_length", len([]rune(prompt))),
+			zap.Error(err),
+		)
+		return "", errors.New(PromptTooLongMessage)
+	}
+
+	optimizedPrompt = strings.TrimSpace(optimizedPrompt)
+	if updateErr := svc.dao.UpdateMessageOptimization(userMessage.ID, true, optimizedPrompt); updateErr != nil {
+		logger.Warn("[Prompt Agent] 更新最终消息优化信息失败", zap.Uint("message_id", userMessage.ID), zap.Error(updateErr))
+	}
+	if updateErr := svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+		"is_optimized":     true,
+		"optimized_prompt": optimizedPrompt,
+	}); updateErr != nil {
+		logger.Warn("[Prompt Agent] 更新最终任务优化信息失败", zap.Uint("run_id", run.ID), zap.Error(updateErr))
+	}
+	userMessage.IsOptimized = true
+	userMessage.OptimizedPrompt = optimizedPrompt
+	run.IsOptimized = true
+	run.OptimizedPrompt = optimizedPrompt
+	return optimizedPrompt, nil
+}
+
+func normalizePromptTargetLength(targetLength int) int {
+	if targetLength <= 0 {
+		return imagePromptTargetLength
+	}
+	if targetLength < 100 {
+		return 100
+	}
+	if targetLength > imagePromptTargetLength {
+		return imagePromptTargetLength
+	}
+	return targetLength
+}
+
 // executeGeneration 执行固定多 Agent DAG，并保存生成产物。
 func (svc *AgentService) executeGeneration(userID uint, conversation model.Conversation, userMessage model.Message, run model.AgentRun, content string, request agent_request.SendMessageRequest) (map[string]interface{}, error) {
 	config, err := svc.resolveRuntimeModelConfig(userID, "image", request.ImageModelConfigID)
 	if err != nil {
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
+	}
+	generationInput, optimizedForGeneration, optimizeReason, err := svc.prepareGenerationPromptInput(userID, userMessage, run, content, request)
+	if err != nil {
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": PromptTooLongMessage})
+		return nil, err
+	}
+	if optimizedForGeneration != "" {
+		content = generationInput
+		userMessage.IsOptimized = true
+		userMessage.OptimizedPrompt = optimizedForGeneration
+		run.IsOptimized = true
+		run.OptimizedPrompt = optimizedForGeneration
 	}
 	memories, _ := svc.dao.ListContextMemories(userID, conversation.ID, 5)
 	questions, _ := svc.dao.ListConversationQuestions(userID, conversation.ID, 20)
@@ -438,15 +576,56 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 	}
 	contextBytes, _ := json.Marshal(contextPackage)
 
-	rawPrompt := svc.composePrompt(conversation.ID, content, memories, questions)
-	promptResult, err := svc.refineGenerationPrompt(userID, normalizeTaskType(request.TaskType), rawPrompt, request.TextModelConfigID)
+	rawPrompt := svc.composePrompt(conversation.ID, generationInput, memories, questions)
+
+	// 准备一个简单的默认提示词作为备用
+	simpleFallbackPrompt := generationInput
+	if strings.TrimSpace(simpleFallbackPrompt) == "" {
+		simpleFallbackPrompt = "Beautiful landscape scenery, natural environment"
+	}
+
+	// 尝试使用 prompt agent 生成提示词
+	var prompt string
+	var promptResult ChatResult
+	if optimizedForGeneration != "" {
+		prompt = optimizedForGeneration
+		promptResult = ChatResult{
+			Content:          optimizedForGeneration,
+			ReasoningContent: optimizeReason,
+		}
+	} else {
+		promptResult, err = svc.refineGenerationPrompt(userID, normalizeTaskType(request.TaskType), rawPrompt, request.TextModelConfigID)
+		if err == nil && strings.TrimSpace(promptResult.Content) != "" {
+			prompt = promptResult.Content
+
+			// 检查生成的提示词是否合理（不是对话回复）
+			lowerPrompt := strings.ToLower(prompt)
+			if strings.Contains(lowerPrompt, "无法") || strings.Contains(lowerPrompt, "不能") ||
+				strings.Contains(lowerPrompt, "抱歉") || strings.Contains(lowerPrompt, "but") ||
+				strings.Contains(lowerPrompt, "i cannot") || strings.Contains(lowerPrompt, "i can't") {
+				// 如果提示词有问题，使用备用
+				prompt = simpleFallbackPrompt
+			}
+		} else {
+			if err != nil && err.Error() == PromptTooLongMessage {
+				_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": PromptTooLongMessage})
+				return nil, err
+			}
+			// 如果 prompt agent 失败，使用备用
+			prompt = simpleFallbackPrompt
+		}
+	}
+	promptBeforeLengthCheck := prompt
+	prompt, err = svc.ensureImagePromptLength(userID, userMessage, run, prompt)
 	if err != nil {
-		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": PromptTooLongMessage})
 		return nil, err
 	}
-	prompt := promptResult.Content
-	if strings.TrimSpace(prompt) == "" {
-		prompt = rawPrompt
+	if prompt != strings.TrimSpace(promptBeforeLengthCheck) {
+		userMessage.IsOptimized = true
+		userMessage.OptimizedPrompt = prompt
+		run.IsOptimized = true
+		run.OptimizedPrompt = prompt
 	}
 	_ = svc.createStepsWithThinking(run.ID, []stepRecord{
 		{
@@ -600,26 +779,103 @@ func (svc *AgentService) refineGenerationPrompt(
 	rawPrompt string,
 	textModelConfigID uint,
 ) (ChatResult, error) {
-	config, err := svc.resolveRuntimeModelConfig(userID, "text", textModelConfigID)
-	if err != nil {
-		return ChatResult{}, err
+	// 检查原始提示词长度
+	rawLength := len([]rune(rawPrompt))
+	if rawLength > imagePromptTargetLength {
+		logger.Warn("[Prompt Agent] 提示词过长，终止生成流程",
+			zap.Int("raw_length", rawLength),
+			zap.Int("target_length", imagePromptTargetLength),
+		)
+		return ChatResult{}, errors.New(PromptTooLongMessage)
 	}
-	systemPrompt := strings.Join([]string{
-		"You are the prompt agent for an image AI Agent workflow.",
-		"Convert the user's Chinese requirements, follow-up answers, and context into a concise final generation prompt.",
-		"Return only the final prompt. Include subject, composition, style, color, aspect ratio, required elements, and avoid-list when present.",
-		"Do not say you cannot generate images. Do not include markdown fences.",
-	}, " ")
-	userPrompt := fmt.Sprintf("task_type=%s\n\n%s", taskType, rawPrompt)
-	return NewProviderWithConfig(config).Chat(ChatRequest{
-		System: systemPrompt,
-		Messages: []ChatMessage{
-			{Role: "user", Content: userPrompt},
-		},
-		ModelConfig:     config,
-		Stream:          true,
-		ReturnReasoning: true,
-	})
+	
+	// 直接使用原始提示词，不做自动优化
+	logger.Info("[Prompt Agent] 使用原始提示词",
+		zap.String("raw_prompt", rawPrompt),
+		zap.Int("raw_length", rawLength),
+	)
+	
+	return ChatResult{
+		Content:          rawPrompt,
+		ReasoningContent: "直接使用用户输入的提示词",
+	}, nil
+}
+
+// 保留 optimizePromptWithDeepseek 函数，供单独调用智能优化使用
+func (svc *AgentService) optimizePromptWithDeepseek(userID uint, prompt string, maxLength int, optimizationType string) (string, error) {
+	// 首先查找用户有权使用的 deepseek-v4-pro 模型配置
+	deepseekConfig, err := svc.findDeepseekV4ProConfig(userID)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to find deepseek-v4-pro config")
+	}
+
+	// 提取 URL 和 API Key
+	apiURL, apiKey, err := extractDeepseekCredentials(deepseekConfig)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to extract deepseek credentials")
+	}
+
+	logger.Info("[Prompt Agent] 找到 deepseek-v4-pro 配置，准备调用专门的提示词优化方法",
+		zap.String("api_url", apiURL),
+		zap.Int("user_id", int(userID)),
+	)
+
+	// 调用专门的 deepseek 提示词缩短方法
+	return model_request.OptimizePromptWithDeepseek(apiURL, apiKey, prompt, maxLength, optimizationType)
+}
+
+// findDeepseekV4ProConfig 查找 deepseek-v4-pro 的模型配置
+func (svc *AgentService) findDeepseekV4ProConfig(userID uint) (model.ModelConfig, error) {
+	// 查找用户有权使用的模型配置
+	configs, err := svc.dao.ListPermittedModelConfigs(userID, true, false)
+	if err != nil {
+		return model.ModelConfig{}, err
+	}
+
+	// 在用户可使用的模型中寻找 deepseek-v4-pro
+	for _, cfg := range configs {
+		modelName := strings.ToLower(strings.TrimSpace(cfg.ModelName))
+		if strings.Contains(modelName, "deepseek-v4-pro") || strings.Contains(modelName, "deepseek_v4_pro") {
+			logger.Info("[Prompt Agent] 找到用户可用的 deepseek-v4-pro 模型配置",
+				zap.String("model_name", cfg.ModelName),
+				zap.Uint("config_id", cfg.ID),
+			)
+			return cfg, nil
+		}
+	}
+
+	// 如果用户没有 deepseek-v4-pro 配置，查找全局配置
+	var globalConfig model.ModelConfig
+	err = database.DB.Where("model_name LIKE ?", "%deepseek-v4-pro%").Or("model_name LIKE ?", "%deepseek_v4_pro%").First(&globalConfig).Error
+	if err != nil {
+		return model.ModelConfig{}, errors.Wrap(err, "deepseek-v4-pro config not found globally")
+	}
+
+	logger.Info("[Prompt Agent] 找到全局 deepseek-v4-pro 模型配置",
+		zap.String("model_name", globalConfig.ModelName),
+		zap.Uint("config_id", globalConfig.ID),
+	)
+	return globalConfig, nil
+}
+
+// extractDeepseekCredentials 从 ModelConfig 中提取 URL 和 API Key
+func extractDeepseekCredentials(config model.ModelConfig) (string, string, error) {
+	// 从 ConfigInfo 中提取必要的参数
+	apiURL := config.RequestURL
+	if apiURL == "" {
+		apiURL = configInfoFirstString(config.ConfigInfo, "base_url", "request_url", "url", "api_url", "endpoint")
+	}
+	if apiURL == "" {
+		// 默认 deepseek API URL
+		apiURL = "https://api.deepseek.com"
+	}
+
+	apiKey := configInfoFirstString(config.ConfigInfo, "api_key", "apikey", "api_key_secret", "secret", "token", "auth_token", "authorization")
+	if apiKey == "" {
+		return "", "", errors.New("api key not found in config")
+	}
+
+	return apiURL, apiKey, nil
 }
 
 // composePrompt 将当前输入和历史记忆组合为 Provider 提示词。

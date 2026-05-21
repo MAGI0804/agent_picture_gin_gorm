@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"gin-biz-web-api/pkg/logger"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -13,14 +14,21 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	"go.uber.org/zap"
 )
 
 var jimengHTTPClient = &http.Client{Timeout: 60 * time.Second}
 
 const (
-	JimengReqKey  = "jimeng_seedream46_cvtob"
-	JimengAction  = "CVSync2AsyncSubmitTask"
-	JimengVersion = "2022-08-31"
+	JimengReqKey           = "jimeng_seedream46_cvtob"
+	JimengActionSubmit     = "CVSync2AsyncSubmitTask"
+	JimengActionQuery      = "CVSync2AsyncGetResult"
+	JimengVersion          = "2022-08-31"
+	JimengStatusDone       = "done"
+	JimengStatusInQueue    = "in_queue"
+	JimengStatusGenerating = "generating"
+	JimengStatusNotFound   = "not_found"
+	JimengStatusExpired    = "expired"
 )
 
 // JimengConfig 即梦AI认证配置。
@@ -54,6 +62,27 @@ type JimengImageResponse struct {
 	Code int `json:"code"` // 状态码，10000表示成功
 	Data struct {
 		TaskID string `json:"task_id"` // 任务ID，用于查询接口
+	} `json:"data"`
+	Message     string `json:"message"`      // 响应消息
+	RequestID   string `json:"request_id"`   // 请求ID，排查错误使用
+	TimeElapsed string `json:"time_elapsed"` // 链路耗时
+}
+
+// JimengQueryTaskRequest 即梦AI查询任务请求参数。
+type JimengQueryTaskRequest struct {
+	ReqKey  string `json:"req_key"`            // 服务标识，固定值: jimeng_seedream46_cvtob
+	TaskID  string `json:"task_id"`            // 任务ID
+	ReqJSON string `json:"req_json,omitempty"` // 可选配置
+}
+
+// JimengQueryTaskResponse 即梦AI查询任务响应结果。
+type JimengQueryTaskResponse struct {
+	Code int `json:"code"` // 状态码，10000表示成功
+	Data struct {
+		TaskID           string   `json:"task_id"`            // 任务ID
+		BinaryDataBase64 []string `json:"binary_data_base64"` // 返回图片的base64数组
+		ImageURLs        []string `json:"image_urls"`         // 返回图片的url数组
+		Status           string   `json:"status"`             // 任务执行状态
 	} `json:"data"`
 	Message     string `json:"message"`      // 响应消息
 	RequestID   string `json:"request_id"`   // 请求ID，排查错误使用
@@ -167,6 +196,14 @@ func signJimengRequest(request *http.Request, config JimengConfig, body []byte) 
 //   - JimengImageResponse: 响应结果，包含task_id用于后续查询
 //   - error: 错误信息
 func SendJimengImageRequest(baseURL string, config JimengConfig, request JimengImageRequest) (JimengImageResponse, error) {
+	// 记录请求开始
+	logger.Info("[Jimeng AI] 开始发送图片生成请求",
+		zap.String("baseURL", baseURL),
+		zap.String("accessKeyID", maskString(config.AccessKeyID)),
+		zap.String("region", config.Region),
+		zap.String("service", config.Service),
+	)
+
 	if strings.TrimSpace(baseURL) == "" {
 		return JimengImageResponse{}, errors.New("baseURL cannot be empty")
 	}
@@ -200,6 +237,10 @@ func SendJimengImageRequest(baseURL string, config JimengConfig, request JimengI
 	}
 
 	if len(request.Prompt) > 800 {
+		logger.Error("[Jimeng AI] 提示词过长",
+			zap.Int("prompt_length", len(request.Prompt)),
+			zap.String("prompt", request.Prompt),
+		)
 		return JimengImageResponse{}, errors.New("prompt cannot exceed 800 characters")
 	}
 
@@ -247,7 +288,7 @@ func SendJimengImageRequest(baseURL string, config JimengConfig, request JimengI
 		return JimengImageResponse{}, errors.New("image_urls can contain at most 14 images")
 	}
 
-	apiURL, err := buildJimengURL(baseURL)
+	apiURL, err := buildJimengURL(baseURL, JimengActionSubmit)
 	if err != nil {
 		return JimengImageResponse{}, errors.Wrap(err, "failed to build URL")
 	}
@@ -297,6 +338,13 @@ func SendJimengImageRequest(baseURL string, config JimengConfig, request JimengI
 		return JimengImageResponse{}, errors.Wrap(err, "failed to marshal payload")
 	}
 
+	// 记录请求 payload
+	logger.Info("[Jimeng AI] 发送请求",
+		zap.String("api_url", apiURL),
+		zap.String("request_payload", string(data)),
+		zap.Int("payload_length", len(data)),
+	)
+
 	httpRequest, err := http.NewRequest("POST", apiURL, bytes.NewReader(data))
 	if err != nil {
 		return JimengImageResponse{}, errors.Wrap(err, "failed to create request")
@@ -307,34 +355,81 @@ func SendJimengImageRequest(baseURL string, config JimengConfig, request JimengI
 		return JimengImageResponse{}, errors.Wrap(err, "failed to sign request")
 	}
 
+	// 记录请求头
+	logger.Debug("[Jimeng AI] 请求头信息",
+		zap.Any("headers", httpRequest.Header),
+	)
+
 	response, err := jimengHTTPClient.Do(httpRequest)
 	if err != nil {
+		logger.Error("[Jimeng AI] 发送请求失败",
+			zap.Error(err),
+		)
 		return JimengImageResponse{}, errors.Wrap(err, "failed to send request")
 	}
 	defer response.Body.Close()
 
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
+		logger.Error("[Jimeng AI] 读取响应失败",
+			zap.Error(err),
+		)
 		return JimengImageResponse{}, errors.Wrap(err, "failed to read response")
 	}
 
+	// 记录完整响应
+	logger.Info("[Jimeng AI] 收到响应",
+		zap.Int("status_code", response.StatusCode),
+		zap.String("response_body", string(body)),
+		zap.Int("response_length", len(body)),
+	)
+
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		logger.Error("[Jimeng AI] API 请求失败",
+			zap.Int("status_code", response.StatusCode),
+			zap.String("response_body", truncate(string(body), 500)),
+		)
 		return JimengImageResponse{}, errors.Errorf("API request failed with status %d: %s", response.StatusCode, truncate(string(body), 500))
 	}
 
 	var result JimengImageResponse
 	if err := json.Unmarshal(body, &result); err != nil {
+		logger.Error("[Jimeng AI] 解析响应失败",
+			zap.Error(err),
+			zap.String("response_body", string(body)),
+		)
 		return JimengImageResponse{}, errors.Wrap(err, "failed to unmarshal response")
 	}
 
 	if result.Code != 10000 {
+		logger.Error("[Jimeng AI] API 返回错误",
+			zap.Int("code", result.Code),
+			zap.String("message", result.Message),
+			zap.String("request_id", result.RequestID),
+		)
 		return JimengImageResponse{}, errors.Errorf("API error: code=%d, message=%s", result.Code, result.Message)
 	}
+
+	// 记录成功的响应
+	logger.Info("[Jimeng AI] 请求成功",
+		zap.Int("code", result.Code),
+		zap.String("task_id", result.Data.TaskID),
+		zap.String("request_id", result.RequestID),
+		zap.String("message", result.Message),
+	)
 
 	return result, nil
 }
 
-func buildJimengURL(baseURL string) (string, error) {
+// maskString 对敏感信息进行掩码处理
+func maskString(s string) string {
+	if len(s) <= 4 {
+		return "****"
+	}
+	return s[:2] + "****" + s[len(s)-2:]
+}
+
+func buildJimengURL(baseURL string, action string) (string, error) {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	parsedURL, err := url.Parse(base)
 	if err != nil {
@@ -342,9 +437,161 @@ func buildJimengURL(baseURL string) (string, error) {
 	}
 
 	query := url.Values{}
-	query.Set("Action", JimengAction)
+	query.Set("Action", action)
 	query.Set("Version", JimengVersion)
 	parsedURL.RawQuery = query.Encode()
 
 	return parsedURL.String(), nil
+}
+
+// SendJimengQueryTaskRequest 查询即梦AI任务状态。
+func SendJimengQueryTaskRequest(baseURL string, config JimengConfig, request JimengQueryTaskRequest) (JimengQueryTaskResponse, error) {
+	logger.Info("[Jimeng AI Query] 开始查询任务状态",
+		zap.String("baseURL", baseURL),
+		zap.String("task_id", request.TaskID),
+	)
+
+	if strings.TrimSpace(baseURL) == "" {
+		return JimengQueryTaskResponse{}, errors.New("baseURL cannot be empty")
+	}
+	if strings.TrimSpace(config.AccessKeyID) == "" {
+		return JimengQueryTaskResponse{}, errors.New("AccessKeyID cannot be empty")
+	}
+	if strings.TrimSpace(config.SecretAccessKey) == "" {
+		return JimengQueryTaskResponse{}, errors.New("SecretAccessKey cannot be empty")
+	}
+	if strings.TrimSpace(config.Region) == "" {
+		return JimengQueryTaskResponse{}, errors.New("Region cannot be empty")
+	}
+	if strings.TrimSpace(config.Service) == "" {
+		return JimengQueryTaskResponse{}, errors.New("Service cannot be empty")
+	}
+	if strings.TrimSpace(request.TaskID) == "" {
+		return JimengQueryTaskResponse{}, errors.New("TaskID cannot be empty")
+	}
+
+	if request.ReqKey == "" {
+		request.ReqKey = JimengReqKey
+	}
+
+	apiURL, err := buildJimengURL(baseURL, JimengActionQuery)
+	if err != nil {
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to build URL")
+	}
+
+	payload := map[string]interface{}{
+		"req_key": request.ReqKey,
+		"task_id": request.TaskID,
+	}
+	if strings.TrimSpace(request.ReqJSON) != "" {
+		payload["req_json"] = request.ReqJSON
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to marshal payload")
+	}
+
+	logger.Info("[Jimeng AI Query] 发送查询请求",
+		zap.String("api_url", apiURL),
+		zap.String("request_payload", string(data)),
+	)
+
+	httpRequest, err := http.NewRequest("POST", apiURL, bytes.NewReader(data))
+	if err != nil {
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to create request")
+	}
+
+	if err := signJimengRequest(httpRequest, config, data); err != nil {
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to sign request")
+	}
+
+	response, err := jimengHTTPClient.Do(httpRequest)
+	if err != nil {
+		logger.Error("[Jimeng AI Query] 发送请求失败", zap.Error(err))
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to send request")
+	}
+	defer response.Body.Close()
+
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		logger.Error("[Jimeng AI Query] 读取响应失败", zap.Error(err))
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to read response")
+	}
+
+	logger.Info("[Jimeng AI Query] 收到响应",
+		zap.Int("status_code", response.StatusCode),
+		zap.String("response_body", string(body)),
+	)
+
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return JimengQueryTaskResponse{}, errors.Errorf("API request failed with status %d: %s", response.StatusCode, truncate(string(body), 500))
+	}
+
+	var result JimengQueryTaskResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		logger.Error("[Jimeng AI Query] 解析响应失败",
+			zap.Error(err),
+			zap.String("response_body", string(body)),
+		)
+		return JimengQueryTaskResponse{}, errors.Wrap(err, "failed to unmarshal response")
+	}
+
+	if result.Code != 10000 {
+		logger.Error("[Jimeng AI Query] API返回错误",
+			zap.Int("code", result.Code),
+			zap.String("message", result.Message),
+			zap.String("request_id", result.RequestID),
+		)
+		return JimengQueryTaskResponse{}, errors.Errorf("API error: code=%d, message=%s", result.Code, result.Message)
+	}
+
+	logger.Info("[Jimeng AI Query] 查询成功",
+		zap.Int("code", result.Code),
+		zap.String("status", result.Data.Status),
+		zap.Int("num_base64_images", len(result.Data.BinaryDataBase64)),
+		zap.Int("num_url_images", len(result.Data.ImageURLs)),
+	)
+
+	return result, nil
+}
+
+// PollJimengTaskUntilComplete 轮询查询任务直到完成。
+func PollJimengTaskUntilComplete(baseURL string, config JimengConfig, taskID string, maxAttempts int, interval time.Duration) (JimengQueryTaskResponse, error) {
+	reqJSON, _ := json.Marshal(map[string]interface{}{
+		"return_url": true,
+	})
+
+	for i := 0; i < maxAttempts; i++ {
+		logger.Info("[Jimeng Poll] 轮询任务状态",
+			zap.Int("attempt", i+1),
+			zap.Int("max_attempts", maxAttempts),
+			zap.String("task_id", taskID),
+		)
+
+		resp, err := SendJimengQueryTaskRequest(baseURL, config, JimengQueryTaskRequest{
+			TaskID:  taskID,
+			ReqJSON: string(reqJSON),
+		})
+		if err != nil {
+			return JimengQueryTaskResponse{}, err
+		}
+
+		if resp.Data.Status == JimengStatusDone {
+			logger.Info("[Jimeng Poll] 任务完成!", zap.String("task_id", taskID))
+			return resp, nil
+		}
+
+		if resp.Data.Status == JimengStatusNotFound || resp.Data.Status == JimengStatusExpired {
+			return JimengQueryTaskResponse{}, errors.Errorf("task %s: %s", taskID, resp.Data.Status)
+		}
+
+		logger.Info("[Jimeng Poll] 任务处理中，继续等待",
+			zap.String("status", resp.Data.Status),
+		)
+
+		time.Sleep(interval)
+	}
+
+	return JimengQueryTaskResponse{}, errors.Errorf("task %s not complete after %d attempts", taskID, maxAttempts)
 }

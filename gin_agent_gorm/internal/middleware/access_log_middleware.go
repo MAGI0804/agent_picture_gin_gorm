@@ -35,18 +35,19 @@ func (w AccessLogWriter) Write(p []byte) (int, error) {
 func AccessLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
-		// 如果是访问静态资源，那么不记录请求日志
-		if strings.HasPrefix(c.Request.URL.Path, config.GetString("cfg.upload.static_fs_relative_path")) {
-			c.Next()
-			return
-		}
+		// 如果是访问静态资源或 artifacts，不记录响应体
+		skipResponseBody := strings.HasPrefix(c.Request.URL.Path, config.GetString("cfg.upload.static_fs_relative_path")) || 
+			strings.HasPrefix(c.Request.URL.Path, "/artifacts/")
 
 		// 获取 response 内容
-		responseBodyWriter := &AccessLogWriter{
-			ResponseWriter: c.Writer,
-			body:           bytes.NewBufferString(""),
+		var responseBodyWriter *AccessLogWriter
+		if !skipResponseBody {
+			responseBodyWriter = &AccessLogWriter{
+				ResponseWriter: c.Writer,
+				body:           bytes.NewBufferString(""),
+			}
+			c.Writer = responseBodyWriter
 		}
-		c.Writer = responseBodyWriter
 
 		// 获取请求数据
 		var requestBody []byte
@@ -64,7 +65,12 @@ func AccessLog() gin.HandlerFunc {
 		cost := time.Since(start)
 
 		// http 响应状态码
-		responseStatus := responseBodyWriter.Status()
+		var responseStatus int
+		if skipResponseBody {
+			responseStatus = c.Writer.Status()
+		} else {
+			responseStatus = responseBodyWriter.Status()
+		}
 
 		// 开始记录日志
 		logFields := []zap.Field{
@@ -73,7 +79,6 @@ func AccessLog() gin.HandlerFunc {
 			zap.String("request_path", c.Request.URL.Path),                   // 只有请求地址，不带参数 eg：`/api/user`
 			zap.String("request_uri", c.Request.RequestURI),                  // 带参数的地址 eg： `/api/user?aa=11&bb=22`
 			zap.String("request_query", c.Request.URL.RawQuery),              // 只有参数 eg：`aa=11&bb=22`
-			// zap.String("request_body", string(requestBody)),                   // 请求的内容
 			zap.String("client_ip", c.ClientIP()), // 客户端的 ip 地址
 			zap.String("remote_addr", c.Request.RemoteAddr),
 			zap.String("user_agent", c.Request.UserAgent()), // 用户请求头
@@ -81,7 +86,6 @@ func AccessLog() gin.HandlerFunc {
 			zap.String("errors", c.Errors.ByType(gin.ErrorTypePrivate).String()),
 			zap.Int("response_status", responseStatus),                  // 当前的响应结果状态码
 			zap.String("code_execute_time", strx.StrMicroseconds(cost)), // 程序执行时间
-			// zap.String("response_body", responseBodyWriter.body.String()), // 当前的请求结果响应体
 		}
 
 		// 记录请求体内容 eg：`"x=33&y=zz"`
@@ -94,8 +98,14 @@ func AccessLog() gin.HandlerFunc {
 		}
 		logFields = append(logFields, zap.String("request_body", logRequestBody))
 
-		// 响应的内容
-		logFields = append(logFields, zap.String("response_body", responseBodyWriter.body.String()))
+		// 响应的内容 - 只在非静态资源和非 artifacts 路径记录
+		var logResponseBody string
+		if skipResponseBody {
+			logResponseBody = "[binary content skipped]"
+		} else {
+			logResponseBody = responseBodyWriter.body.String()
+		}
+		logFields = append(logFields, zap.String("response_body", logResponseBody))
 
 		// 记录访问日志
 		logger.Info("HTTP Access Log [ "+cast.ToString(responseStatus)+" ]", logFields...)

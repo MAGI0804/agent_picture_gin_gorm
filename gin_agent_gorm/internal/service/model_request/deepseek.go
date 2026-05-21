@@ -3,6 +3,7 @@ package model_request
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"strings"
@@ -285,4 +286,89 @@ func truncate(value string, limit int) string {
 		return value
 	}
 	return value[:limit] + "..."
+}
+
+// OptimizePromptWithDeepseek 使用 deepseek-v4-pro 智能优化提示词
+// 功能：智能优化图片生成提示词，保持关键信息的同时使其更专业、更有效
+//
+// 参数:
+//   - url: Deepseek API 的基础地址
+//   - apiKey: API 密钥
+//   - originalPrompt: 原始提示词
+//   - targetLength: 目标最大字符数（建议 800）
+//   - optimizationType: 优化类型："shorten"（缩短）或 "enhance"（增强）
+//
+// 返回:
+//   - string: 优化后的提示词
+//   - error: 错误信息
+func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength int, optimizationType string) (string, error) {
+	if strings.TrimSpace(url) == "" {
+		return "", errors.New("url cannot be empty")
+	}
+	if strings.TrimSpace(apiKey) == "" {
+		return "", errors.New("apiKey cannot be empty")
+	}
+	if strings.TrimSpace(originalPrompt) == "" {
+		return "", errors.New("originalPrompt cannot be empty")
+	}
+
+	var systemPrompt string
+	var userPrompt string
+
+	if optimizationType == "shorten" {
+		// 缩短模式：在保持关键元素的情况下缩短提示词
+		systemPrompt = strings.Join([]string{
+			"You are an expert prompt engineer specialized in optimizing image generation prompts.",
+			"Your task: shorten the given prompt while preserving ALL critical visual information.",
+			fmt.Sprintf("CRITICAL: Try your best to make the prompt under %d characters long.", targetLength),
+			"Keep ALL key elements: subject, composition, style, colors, lighting, text placements, dimensions, etc.",
+			"Make it concise but keep full visual meaning.",
+			"Return ONLY the optimized prompt, no explanations.",
+		}, " ")
+		userPrompt = fmt.Sprintf("Please shorten this image generation prompt while keeping ALL important details. Try to make it under %d characters:\n\n%s",
+			targetLength, originalPrompt)
+	} else {
+		// 增强模式：优化和增强提示词
+		systemPrompt = strings.Join([]string{
+			"You are an expert prompt engineer specialized in optimizing image generation prompts.",
+			"Your task: enhance and optimize the given prompt for better image generation results.",
+			fmt.Sprintf("CRITICAL: Try your best to make the prompt under %d characters long.", targetLength),
+			"Improve clarity, add useful artistic/style details where appropriate, but keep the core intent.",
+			"Return ONLY the optimized prompt, no explanations.",
+		}, " ")
+		userPrompt = fmt.Sprintf("Please optimize and enhance this image generation prompt. Try to make it under %d characters:\n\n%s",
+			targetLength, originalPrompt)
+	}
+
+	request := DeepseekChatRequest{
+		System: systemPrompt,
+		Messages: []DeepseekMessage{
+			{
+				Role:    "user",
+				Content: userPrompt,
+			},
+		},
+		Stream:          false,
+		ReturnReasoning: false,
+		Temperature:     0.7, // 使用适中的温度
+		MaxTokens:       1000,
+	}
+
+	result, err := SendDeepseekRequest(url, apiKey, "deepseek-v4-pro", request)
+	if err != nil {
+		return "", errors.Wrap(err, "failed to optimize prompt with Deepseek")
+	}
+
+	optimizedPrompt := strings.TrimSpace(result.Content)
+	if optimizedPrompt == "" {
+		return "", errors.New("optimized prompt is empty")
+	}
+
+	return optimizedPrompt, nil
+}
+
+// ShortenImagePrompt 专用方法：智能缩短图片生成提示词到目标长度
+// 这是 OptimizePromptWithDeepseek 的便捷包装方法
+func ShortenImagePrompt(url, apiKey, originalPrompt string, maxLength int) (string, error) {
+	return OptimizePromptWithDeepseek(url, apiKey, originalPrompt, maxLength, "shorten")
 }

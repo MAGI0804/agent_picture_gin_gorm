@@ -569,52 +569,139 @@ func (provider *HTTPProvider) generateJimengImage(
 	baseURL string,
 	modelName string,
 ) ([]GeneratedFile, error) {
+	// 记录即将发送的请求
+	logger.Info("[Jimeng Provider] 准备发送图片生成请求",
+		zap.String("baseURL", baseURL),
+		zap.String("model_name", modelName),
+		zap.String("prompt", request.Prompt),
+		zap.Int("prompt_length", len([]rune(request.Prompt))),
+	)
+
 	config := model_request.JimengConfig{
-		AccessKeyID:     runtimeConfigString(provider.config, "access_key_id", "ak"),
-		SecretAccessKey: runtimeConfigString(provider.config, "secret_access_key", "sk"),
+		AccessKeyID:     runtimeConfigString(provider.config, "access_key_id", "ak", "access_key", "accesskey"),
+		SecretAccessKey: runtimeConfigString(provider.config, "secret_access_key", "sk", "secret_key", "secretkey"),
 		Region:          runtimeConfigString(provider.config, "region"),
 		Service:         runtimeConfigString(provider.config, "service"),
 	}
+
+	// 记录配置信息（敏感信息已掩码）
+	logger.Info("[Jimeng Provider] 配置信息",
+		zap.String("access_key_id", maskString(config.AccessKeyID)),
+		zap.String("region", config.Region),
+		zap.String("service", config.Service),
+	)
+
 	if config.Region == "" {
 		config.Region = "cn-north-1"
+		logger.Info("[Jimeng Provider] 使用默认区域", zap.String("region", config.Region))
 	}
 	if config.Service == "" {
 		config.Service = "cv"
+		logger.Info("[Jimeng Provider] 使用默认服务", zap.String("service", config.Service))
 	}
 	reqKey := runtimeConfigString(provider.config, "req_key")
 	if reqKey == "" {
 		reqKey = model_request.JimengReqKey
 	}
-	response, err := model_request.SendJimengImageRequest(baseURL, config, model_request.JimengImageRequest{
+
+	// 准备最终的 prompt
+	finalPrompt := truncateForJimengPrompt(request.Prompt)
+	logger.Info("[Jimeng Provider] 最终发送的 prompt",
+		zap.String("final_prompt", finalPrompt),
+		zap.Int("final_prompt_length", len([]rune(finalPrompt))),
+	)
+
+	jimengRequest := model_request.JimengImageRequest{
 		ReqKey:      reqKey,
-		Prompt:      truncateForJimengPrompt(request.Prompt),
+		Prompt:      finalPrompt,
 		Width:       runtimeConfigInt(provider.config, "width"),
 		Height:      runtimeConfigInt(provider.config, "height"),
 		Scale:       runtimeConfigInt(provider.config, "scale"),
 		ForceSingle: runtimeConfigBool(provider.config, "force_single"),
 		ReturnURL:   true,
-	})
+	}
+
+	// 记录完整的请求对象
+	logger.Debug("[Jimeng Provider] 完整请求对象", zap.Any("request", jimengRequest))
+
+	// 1. 提交任务
+	submitResponse, err := model_request.SendJimengImageRequest(baseURL, config, jimengRequest)
 	if err != nil {
+		logger.Error("[Jimeng Provider] 提交任务失败", zap.Error(err))
 		return nil, err
 	}
-	payload := map[string]interface{}{
-		"provider":     provider.config.Provider,
-		"model":        modelName,
-		"task_id":      response.Data.TaskID,
-		"request_id":   response.RequestID,
-		"time_elapsed": response.TimeElapsed,
-		"message":      response.Message,
-	}
-	content, err := json.MarshalIndent(payload, "", "  ")
+	taskID := submitResponse.Data.TaskID
+	logger.Info("[Jimeng Provider] 任务提交成功，开始轮询", zap.String("task_id", taskID))
+
+	// 2. 轮询任务状态直到完成
+	queryResponse, err := model_request.PollJimengTaskUntilComplete(baseURL, config, taskID, 150, 2*time.Second)
 	if err != nil {
-		return nil, errors.Wrap(err, "encode jimeng task artifact")
+		logger.Error("[Jimeng Provider] 轮询任务失败", zap.Error(err))
+		return nil, err
 	}
-	return []GeneratedFile{{
-		Name:     "jimeng-task.json",
-		Kind:     "json",
-		MimeType: "application/json; charset=utf-8",
-		Content:  content,
-	}}, nil
+
+	// 3. 处理生成的图片
+	var files []GeneratedFile
+
+	// 优先使用 image_urls
+	if len(queryResponse.Data.ImageURLs) > 0 {
+		logger.Info("[Jimeng Provider] 从URL下载图片", zap.Int("count", len(queryResponse.Data.ImageURLs)))
+		for i, imgURL := range queryResponse.Data.ImageURLs {
+			downloadedFile, err := provider.downloadGeneratedImage(imgURL)
+			if err != nil {
+				logger.Warn("[Jimeng Provider] 下载图片失败", zap.Int("index", i), zap.Error(err))
+				continue
+			}
+			downloadedFile.Name = fmt.Sprintf("generated-image-%d.png", i+1)
+			files = append(files, downloadedFile)
+		}
+	}
+
+	// 如果没有 URL，尝试使用 base64
+	if len(files) == 0 && len(queryResponse.Data.BinaryDataBase64) > 0 {
+		logger.Info("[Jimeng Provider] 使用Base64解码图片", zap.Int("count", len(queryResponse.Data.BinaryDataBase64)))
+		for i, base64Data := range queryResponse.Data.BinaryDataBase64 {
+			imgData, err := base64.StdEncoding.DecodeString(base64Data)
+			if err != nil {
+				logger.Warn("[Jimeng Provider] Base64解码失败", zap.Int("index", i), zap.Error(err))
+				continue
+			}
+			files = append(files, GeneratedFile{
+				Name:     fmt.Sprintf("generated-image-%d.png", i+1),
+				Kind:     "image",
+				MimeType: "image/png",
+				Content:  imgData,
+			})
+		}
+	}
+
+	// 如果还是没有图片，返回任务信息作为备选
+	if len(files) == 0 {
+		logger.Warn("[Jimeng Provider] 未获取到图片，返回任务信息")
+		payload := map[string]interface{}{
+			"provider":     provider.config.Provider,
+			"model":        modelName,
+			"task_id":      taskID,
+			"request_id":   queryResponse.RequestID,
+			"time_elapsed": queryResponse.TimeElapsed,
+			"message":      queryResponse.Message,
+			"status":       queryResponse.Data.Status,
+		}
+		content, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return nil, errors.Wrap(err, "encode jimeng task artifact")
+		}
+		files = append(files, GeneratedFile{
+			Name:     "jimeng-task.json",
+			Kind:     "json",
+			MimeType: "application/json; charset=utf-8",
+			Content:  content,
+		})
+	} else {
+		logger.Info("[Jimeng Provider] 成功获取图片", zap.Int("count", len(files)))
+	}
+
+	return files, nil
 }
 
 func (provider *HTTPProvider) generateDashScopeImage(
@@ -665,11 +752,19 @@ func isJimengProvider(providerName string, baseURL string) bool {
 }
 
 func runtimeConfigString(config model.UserModelConfig, keys ...string) string {
+	// 对每个提供的键名，尝试多种变体形式进行查找
 	for _, key := range keys {
-		value, ok := config.RuntimeConfig[key]
-		if !ok || value == nil {
-			continue
+		value := findRuntimeConfigValue(config.RuntimeConfig, key)
+		if value != "" {
+			return value
 		}
+	}
+	return ""
+}
+
+func findRuntimeConfigValue(runtimeConfig model.JSONMap, key string) string {
+	// 先尝试精确匹配
+	if value, ok := runtimeConfig[key]; ok && value != nil {
 		switch typed := value.(type) {
 		case string:
 			if strings.TrimSpace(typed) != "" {
@@ -682,6 +777,29 @@ func runtimeConfigString(config model.UserModelConfig, keys ...string) string {
 			}
 		}
 	}
+
+	// 尝试大小写不敏感匹配和空格/下划线替换
+	targetKeyLower := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, " ", ""), "_", ""))
+	for k, value := range runtimeConfig {
+		if value == nil {
+			continue
+		}
+		kLower := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(k, " ", ""), "_", ""))
+		if kLower == targetKeyLower {
+			switch typed := value.(type) {
+			case string:
+				if strings.TrimSpace(typed) != "" {
+					return strings.TrimSpace(typed)
+				}
+			default:
+				text := strings.TrimSpace(fmt.Sprint(typed))
+				if text != "" {
+					return text
+				}
+			}
+		}
+	}
+
 	return ""
 }
 
@@ -707,11 +825,28 @@ func runtimeConfigBool(config model.UserModelConfig, key string) bool {
 }
 
 func truncateForJimengPrompt(prompt string) string {
-	runes := []rune(strings.TrimSpace(prompt))
-	if len(runes) <= 800 {
+	// 先去除 markdown 格式
+	cleaned := strings.TrimSpace(prompt)
+
+	// 如果是中文，尝试提取纯英文提示词（因为中文可能占用更多字符）
+	// 或者直接截断
+	runes := []rune(cleaned)
+
+	// 更激进的截断，确保不超过 750 字符（留出一些余地）
+	maxLength := 750
+	if len(runes) <= maxLength {
 		return string(runes)
 	}
-	return string(runes[:800])
+
+	// 尝试在标点符号处截断，避免截断单词
+	for i := maxLength; i > maxLength-100 && i > 0; i-- {
+		if strings.ContainsRune(".,!?，。！？", runes[i]) {
+			return string(runes[:i+1])
+		}
+	}
+
+	// 如果找不到合适的位置，直接截断
+	return string(runes[:maxLength])
 }
 
 func (provider *HTTPProvider) parseOpenAIImageFile(body []byte, prompt string) (GeneratedFile, error) {
@@ -815,4 +950,12 @@ func imageExtension(mimeType string) string {
 	default:
 		return ".png"
 	}
+}
+
+// maskString 对敏感信息进行掩码处理
+func maskString(s string) string {
+	if len(s) <= 4 {
+		return "****"
+	}
+	return s[:2] + "****" + s[len(s)-2:]
 }

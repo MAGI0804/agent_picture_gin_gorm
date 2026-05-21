@@ -298,7 +298,7 @@ func filterRealModelConfigs(configs []model.ModelConfig) []model.ModelConfig {
 }
 
 func isMockModelConfig(config model.ModelConfig) bool {
-	provider := strings.ToLower(configInfoString(config.ConfigInfo, "provider"))
+	provider := strings.ToLower(configInfoFirstString(config.ConfigInfo, "provider", "vendor", "api_type", "type", "provider name", "api type"))
 	modelName := strings.ToLower(strings.TrimSpace(config.ModelName))
 	requestURL := strings.TrimSpace(config.RequestURL)
 

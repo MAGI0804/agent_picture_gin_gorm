@@ -23,6 +23,7 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 		// 消息路由
 		agentGroup.GET("/conversations/:id/messages", agentCtrl.ListMessages) // GET /api/conversations/:id/messages - 获取指定会话的消息列表
 		agentGroup.POST("/conversations/:id/messages", agentCtrl.SendMessage) // POST /api/conversations/:id/messages - 发送消息（普通对话或补充问题回答）
+		agentGroup.POST("/prompts/optimize", agentCtrl.OptimizePrompt)        // POST /api/prompts/optimize - 智能优化提示词
 
 		// 产物路由
 		agentGroup.GET("/conversations/:id/artifacts", agentCtrl.ListArtifacts) // GET /api/conversations/:id/artifacts - 获取会话的生成产物列表

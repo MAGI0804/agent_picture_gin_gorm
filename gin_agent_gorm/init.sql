@@ -1,4 +1,4 @@
-create database if not exists gin_biz_web_api;
+create database if not exists gin_biz_web_api character set utf8mb4 collate utf8mb4_0900_ai_ci;
 
 use gin_biz_web_api;
 
@@ -20,4 +20,4 @@ create table if not exists `users`
     unique key unique_account (account)
 ) engine = InnoDB
   default charset = utf8mb4
-  collate = utf8mb4_unicode_ci comment '用户表';
+  collate = utf8mb4_0900_ai_ci comment '用户表';

@@ -194,6 +194,22 @@ func (ctrl *AgentController) SendMessage(c *gin.Context) {
 	responses.New(c).ToResponse(result)
 }
 
+// OptimizePrompt 智能优化提示词。
+func (ctrl *AgentController) OptimizePrompt(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	var request agent_request.OptimizePromptRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "请求参数错误")
+		return
+	}
+	result, err := agent_svc.NewAgentService().OptimizePrompt(userID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(result)
+}
+
 // ListArtifacts 获取指定会话下的生成产物列表。
 // GET /api/conversations/:id/artifacts
 //

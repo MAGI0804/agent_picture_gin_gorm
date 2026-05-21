@@ -12,10 +12,18 @@ type SendMessageRequest struct {
 	Content             string `json:"content" form:"content"`
 	TextModelConfigID   uint   `json:"text_model_config_id" form:"text_model_config_id"`
 	ImageModelConfigID  uint   `json:"image_model_config_id" form:"image_model_config_id"`
+	IsOptimized         bool   `json:"is_optimized" form:"is_optimized"`
+	OptimizedPrompt     string `json:"optimized_prompt" form:"optimized_prompt"`
 	AnsweredQuestionIDs []uint `json:"answered_question_ids" form:"answered_question_ids"`
 	Attachments         []uint `json:"attachments" form:"attachments"`
 	Stream              bool   `json:"stream" form:"stream"`
 	ReturnReasoning     bool   `json:"return_reasoning" form:"return_reasoning"`
+}
+
+// OptimizePromptRequest 是智能优化提示词的请求参数。
+type OptimizePromptRequest struct {
+	Content      string `json:"content" form:"content"`
+	TargetLength int    `json:"target_length" form:"target_length"`
 }
 
 // LoginRequest 是前端工作台登录接口的请求参数。

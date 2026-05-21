@@ -100,7 +100,7 @@
               <textarea
                 v-model="normalText"
                 placeholder="输入聊天内容，或描述要生成的图片 / HTML 页面。Enter 发送，Shift + Enter 换行。"
-                @keydown.enter.exact.prevent="sendNormal"
+                @keydown.enter.exact.prevent="sendNormal()"
               />
               <div class="composer-tools">
                 <select v-model="taskType" aria-label="模式">
@@ -113,7 +113,28 @@
                     {{ item.model_name }}
                   </option>
                 </select>
-                <button :disabled="!canSendNormal" @click="sendNormal">发送</button>
+                <button :disabled="!canSendNormal" @click="sendNormal()">发送</button>
+                <button class="secondary-action" :disabled="!canOptimizePrompt" @click="optimizeNormalPrompt">
+                  {{ optimizingPrompt ? '优化中...' : '智能优化' }}
+                </button>
+              </div>
+              <div v-if="optimizedPromptText || optimizationError || optimizingPrompt" class="optimization-panel">
+                <div class="optimization-header">
+                  <strong>优化后的提示词</strong>
+                  <span v-if="optimizedPromptText">{{ optimizedPromptText.length }} 字</span>
+                </div>
+                <textarea
+                  v-if="optimizedPromptText"
+                  v-model="optimizedPromptText"
+                  aria-label="优化后的提示词"
+                />
+                <p v-if="optimizationError" class="optimization-error">{{ optimizationError }}</p>
+                <div v-if="optimizedPromptText" class="optimization-actions">
+                  <button class="primary" :disabled="sendingNormal || !optimizedPromptText.trim()" @click="sendNormal(true)">
+                    是，使用优化后提问
+                  </button>
+                  <button :disabled="sendingNormal" @click="sendNormal(false)">否，使用原提示词</button>
+                </div>
               </div>
             </div>
           </label>
@@ -136,15 +157,57 @@
 
         <section v-if="rightTab === 'artifacts'" class="artifact-list">
           <p v-if="!artifacts.length" class="muted">暂无产物。发起图片或 HTML 生成后会显示在这里。</p>
-          <article v-for="artifact in artifacts" :key="artifact.id" class="artifact">
-            <div class="artifact-title">
-              <strong>{{ artifact.name }}</strong>
-              <button @click="downloadArtifactFile(artifact)">下载</button>
+          
+          <!-- 图片生成中/等待状态显示 -->
+          <div v-if="sendingNormal || sendingAnswer" class="generating-status">
+            <div class="spinner"></div>
+            <span>任务提交成功，正在构建图片...</span>
+          </div>
+          
+          <!-- 多图片展示区域 -->
+          <div v-if="imageArtifacts.length > 0" class="image-gallery">
+            <!-- 左侧图片缩略图列表 -->
+            <div class="thumbnail-list">
+              <div 
+                v-for="(artifact, index) in imageArtifacts" 
+                :key="artifact.id"
+                :class="['thumbnail-item', { active: index === selectedImageIndex }]"
+                @click="selectedImageIndex = index"
+              >
+                <img :src="artifact.preview_url" :alt="artifact.name" />
+              </div>
             </div>
-            <img v-if="artifact.kind === 'image'" :src="artifact.preview_url" :alt="artifact.name" />
-            <iframe v-else-if="artifact.kind === 'html'" :src="artifact.preview_url" :title="artifact.name" />
-            <p v-else>{{ artifact.mime_type }}</p>
-          </article>
+            
+            <!-- 右侧大图展示区 -->
+            <div class="main-image-container">
+              <div class="main-image-header">
+                <strong>{{ imageArtifacts[selectedImageIndex]?.name }}</strong>
+                <button @click="downloadArtifactFile(imageArtifacts[selectedImageIndex])">下载</button>
+              </div>
+              <img 
+                v-if="imageArtifacts[selectedImageIndex]" 
+                :src="imageArtifacts[selectedImageIndex].preview_url" 
+                :alt="imageArtifacts[selectedImageIndex].name" 
+                class="main-image"
+              />
+              <div class="image-counter">
+                {{ selectedImageIndex + 1 }} / {{ imageArtifacts.length }}
+              </div>
+            </div>
+          </div>
+          
+          <!-- 单图片/其他类型展示区 -->
+          <template v-else-if="artifacts.length > 0">
+            <article v-for="artifact in artifacts" :key="artifact.id" class="artifact">
+              <div class="artifact-title">
+                <strong>{{ artifact.name }}</strong>
+                <button @click="downloadArtifactFile(artifact)">下载</button>
+              </div>
+              <img v-if="artifact.kind === 'image'" :src="artifact.preview_url" :alt="artifact.name" />
+              <iframe v-else-if="artifact.kind === 'html'" :src="artifact.preview_url" :title="artifact.name" />
+              <p v-else>{{ artifact.mime_type }}</p>
+            </article>
+          </template>
         </section>
 
         <section v-else-if="rightTab === 'messages'" class="message-list">
@@ -214,6 +277,12 @@ interface SendMessageResponse {
   conversation?: Conversation
 }
 
+interface OptimizePromptResponse {
+  original_prompt: string
+  optimized_prompt: string
+  target_length: number
+}
+
 const router = useRouter()
 const conversations = ref<Conversation[]>([])
 const activeConversationId = ref<number | null>(null)
@@ -228,6 +297,9 @@ const normalText = ref('')
 const taskType = ref<TaskType>('text_chat')
 const sendingNormal = ref(false)
 const sendingAnswer = ref(false)
+const optimizingPrompt = ref(false)
+const optimizedPromptText = ref('')
+const optimizationError = ref('')
 const sidebarWidth = ref(280)
 const panelWidth = ref(420)
 const resizing = ref<'left' | 'right' | null>(null)
@@ -247,6 +319,7 @@ const modelSummary = computed(() => {
   return `${text} / ${image}`
 })
 const canSendNormal = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value)
+const canOptimizePrompt = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value && !optimizingPrompt.value)
 const canSendAnswer = computed(() => {
   return Boolean(activeConversationId.value && answerText.value.trim() && pendingQuestions.value.length) && !sendingAnswer.value
 })
@@ -262,6 +335,8 @@ const currentModelId = computed(() => {
 })
 const selectedTextModelId = computed(() => modelSelection.value?.text_model_config_id || 0)
 const selectedImageModelId = computed(() => modelSelection.value?.image_model_config_id || 0)
+const selectedImageIndex = ref<number>(0)
+const imageArtifacts = computed(() => artifacts.value.filter(item => item.kind === 'image'))
 
 onMounted(async () => {
   await loadModelSelection()
@@ -336,10 +411,14 @@ async function loadArtifacts() {
   artifacts.value = data.artifacts || []
 }
 
-async function sendNormal() {
-  if (sendingNormal.value || !normalText.value.trim()) return
-  const content = normalText.value.trim()
+async function sendNormal(useOptimizedPrompt = false) {
+  const originalContent = normalText.value.trim()
+  const optimizedContent = optimizedPromptText.value.trim()
+  const isUsingOptimized = Boolean(useOptimizedPrompt && optimizedContent)
+  const content = isUsingOptimized ? optimizedContent : originalContent
+  if (sendingNormal.value || !content) return
   normalText.value = ''
+  clearPromptOptimization()
   sendingNormal.value = true
   try {
     const conversationId = await ensureConversation()
@@ -355,6 +434,8 @@ async function sendNormal() {
         content,
         text_model_config_id: selectedTextModelId.value,
         image_model_config_id: taskType.value === 'image_generation' ? selectedImageModelId.value : 0,
+        is_optimized: isUsingOptimized,
+        optimized_prompt: isUsingOptimized ? optimizedContent : '',
         stream: true,
         return_reasoning: true
       })
@@ -365,6 +446,32 @@ async function sendNormal() {
   } finally {
     sendingNormal.value = false
   }
+}
+
+async function optimizeNormalPrompt() {
+  if (optimizingPrompt.value || !normalText.value.trim()) return
+  optimizationError.value = ''
+  optimizedPromptText.value = ''
+  optimizingPrompt.value = true
+  try {
+    const data = await apiFetch<OptimizePromptResponse>('/api/prompts/optimize', {
+      method: 'POST',
+      body: JSON.stringify({
+        content: normalText.value.trim(),
+        target_length: 700
+      })
+    })
+    optimizedPromptText.value = data.optimized_prompt || ''
+  } catch (error) {
+    optimizationError.value = error instanceof Error ? error.message : '提示词太长，请重新输入'
+  } finally {
+    optimizingPrompt.value = false
+  }
+}
+
+function clearPromptOptimization() {
+  optimizedPromptText.value = ''
+  optimizationError.value = ''
 }
 
 async function sendAnswer() {
@@ -488,6 +595,8 @@ function createLocalMessage(conversationId: number, inputType: string, content: 
     role: 'user',
     input_type: inputType,
     content,
+    is_optimized: false,
+    optimized_prompt: '',
     agent_run_id: 0,
     created_at: Math.floor(Date.now() / 1000),
     updated_at: Math.floor(Date.now() / 1000)

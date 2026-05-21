@@ -68,6 +68,16 @@ func (dao *AgentDAO) CreateMessage(message *model.Message) error {
 	return database.DB.Create(message).Error
 }
 
+// UpdateMessageOptimization 更新消息对应的提示词优化信息。
+func (dao *AgentDAO) UpdateMessageOptimization(messageID uint, isOptimized bool, optimizedPrompt string) error {
+	return database.DB.Model(&model.Message{}).
+		Where("id = ?", messageID).
+		Updates(map[string]interface{}{
+			"is_optimized":     isOptimized,
+			"optimized_prompt": optimizedPrompt,
+		}).Error
+}
+
 // UpdateMessageAgentRunID 将消息和 Agent Run 关联起来。
 func (dao *AgentDAO) UpdateMessageAgentRunID(messageID uint, agentRunID uint) error {
 	return database.DB.Model(&model.Message{}).Where("id = ?", messageID).Update("agent_run_id", agentRunID).Error

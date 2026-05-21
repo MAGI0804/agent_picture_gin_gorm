@@ -20,6 +20,8 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   input_type: string
   content: string
+  is_optimized?: boolean
+  optimized_prompt?: string
   thinking_content?: string
   agent_run_id: number
   created_at: number
@@ -76,6 +78,8 @@ export interface AgentRun {
   trigger_message_id: number
   status: string
   intent: string
+  is_optimized?: boolean
+  optimized_prompt?: string
   error_message: string
 }
 
