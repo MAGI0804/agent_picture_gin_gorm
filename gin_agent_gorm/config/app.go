@@ -58,7 +58,7 @@ func init() {
 			"read_timeout": config.Get("App.ReadTimeout", 60),
 
 			// 允许写入的最大持续时间（单位：s）
-			"write_timeout": config.Get("App.WriteTimeout", 60),
+			"write_timeout": config.Get("App.WriteTimeout", 300),
 
 			// 设置时区，使用 jwt 包时会用到
 			"timezone": config.Get("App.Timezone", "Asia/Shanghai"),
