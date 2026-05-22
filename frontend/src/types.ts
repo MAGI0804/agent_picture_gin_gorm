@@ -4,6 +4,18 @@ export interface ApiResponse<T> {
   data: T
 }
 
+export interface UserProfile {
+  id: number
+  account: string
+  email: string
+  phone?: string
+  nickname: string
+  avatar?: string
+  introduction?: string
+  created_at?: number
+  updated_at?: number
+}
+
 export interface Conversation {
   id: number
   user_id: number
@@ -21,6 +33,7 @@ export interface Message {
   input_type: string
   content: string
   is_optimized?: boolean
+  original_prompt?: string
   optimized_prompt?: string
   thinking_content?: string
   agent_run_id: number

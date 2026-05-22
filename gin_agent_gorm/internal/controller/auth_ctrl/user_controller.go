@@ -55,7 +55,7 @@ func (ctrl *UserController) Index(c *gin.Context) {
 // 返回数据: 当前登录用户对象
 func (ctrl *UserController) Profile(c *gin.Context) {
 	profile := auth.CurrentUser(c)
-	responses.New(c).ToResponse(profile)
+	responses.New(c).ToResponse(publicUser(profile))
 }
 
 // Login 用户登录，支持账号或邮箱登录。
@@ -100,6 +100,46 @@ func (ctrl *UserController) Login(c *gin.Context) {
 
 	response.ToResponse(gin.H{
 		"token": jwt.NewJWT().GenerateToken(user.GetStringID()),
-		"user":  user,
+		"user":  publicUser(user),
 	})
+}
+
+func publicUser(user model.User) gin.H {
+	nickname := user.Nickname
+	if nickname == "" {
+		nickname = user.Account
+	}
+
+	return gin.H{
+		"id":           publicUserID(user),
+		"account":      user.Account,
+		"email":        user.Email,
+		"phone":        user.Phone,
+		"nickname":     nickname,
+		"avatar":       user.Avatar,
+		"introduction": user.Introduction,
+		"created_at":   publicUserCreatedAt(user),
+		"updated_at":   publicUserUpdatedAt(user),
+	}
+}
+
+func publicUserID(user model.User) uint {
+	if user.BaseModel == nil {
+		return 0
+	}
+	return user.ID
+}
+
+func publicUserCreatedAt(user model.User) int {
+	if user.CommonTimestampsField == nil {
+		return 0
+	}
+	return user.CreatedAt
+}
+
+func publicUserUpdatedAt(user model.User) int {
+	if user.CommonTimestampsField == nil {
+		return 0
+	}
+	return user.UpdatedAt
 }

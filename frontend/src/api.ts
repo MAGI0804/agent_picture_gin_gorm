@@ -1,4 +1,4 @@
-import type { ApiResponse } from './types'
+import type { ApiResponse, UserProfile } from './types'
 
 const API_BASE = ''
 
@@ -9,9 +9,29 @@ export function getToken() {
 export function setToken(token: string) {
   if (!token) {
     localStorage.removeItem('agent_token')
+    localStorage.removeItem('agent_user')
     return
   }
   localStorage.setItem('agent_token', token)
+}
+
+export function getCurrentUser() {
+  const raw = localStorage.getItem('agent_user')
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as UserProfile
+  } catch {
+    localStorage.removeItem('agent_user')
+    return null
+  }
+}
+
+export function setCurrentUser(user: UserProfile | null) {
+  if (!user) {
+    localStorage.removeItem('agent_user')
+    return
+  }
+  localStorage.setItem('agent_user', JSON.stringify(user))
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
@@ -25,8 +45,19 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     headers.set('token', token)
   }
 
-  const response = await fetch(API_BASE + path, { ...options, headers })
-  const payload = (await response.json()) as ApiResponse<T>
+  let response: Response
+  try {
+    response = await fetch(API_BASE + path, { ...options, headers })
+  } catch {
+    throw new Error('无法连接服务器，请确认后端服务已启动')
+  }
+
+  let payload: ApiResponse<T>
+  try {
+    payload = (await response.json()) as ApiResponse<T>
+  } catch {
+    throw new Error(response.ok ? '服务器返回格式异常' : `请求失败（HTTP ${response.status}）`)
+  }
   if (isAuthExpired(payload)) {
     redirectToLogin()
     throw new Error(payload.msg || '登录已过期，请重新登录')

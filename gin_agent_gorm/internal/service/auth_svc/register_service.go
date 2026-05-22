@@ -25,9 +25,12 @@ func (svc *RegisterService) CreateUserToken(c *gin.Context, request auth_request
 		Account:  request.Account,
 		Email:    request.Email,
 		Password: request.Password,
+		Nickname: request.Account,
 	}
 
-	err := database.DB.Model(&model.User{}).Select("account", "email", "password").Create(&user).Error
+	err := database.DB.Model(&model.User{}).
+		Select("account", "email", "password", "nickname").
+		Create(&user).Error
 	if err != nil {
 		logger.LogErrorIf(err)
 		return ""

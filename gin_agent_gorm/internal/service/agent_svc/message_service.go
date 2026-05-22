@@ -75,9 +75,12 @@ func (svc *AgentService) OptimizePrompt(userID uint, request agent_request.Optim
 		return nil, errors.New("优化结果为空，请重试")
 	}
 	if len([]rune(optimizedPrompt)) > targetLength {
-		optimizedPrompt = truncatePromptRunes(optimizedPrompt, targetLength)
+		logger.Warn("[OptimizePrompt] 优化结果仍超过目标长度",
+			zap.Int("optimized_length", len([]rune(optimizedPrompt))),
+			zap.Int("target_length", targetLength),
+		)
+		return nil, errors.Errorf("智能优化失败：优化结果仍超过 %d 个字符，请缩短输入后重试", targetLength)
 	}
-	optimizedPrompt = truncatePromptBytes(optimizedPrompt, imagePromptTargetBytes)
 
 	finalLength := len([]rune(optimizedPrompt))
 	logger.Info("[OptimizePrompt] 优化完成",
@@ -123,6 +126,7 @@ func (svc *AgentService) SendMessage(userID uint, conversationID uint, request a
 	}
 	optimizedPrompt := strings.TrimSpace(request.OptimizedPrompt)
 	isOptimized := request.IsOptimized && optimizedPrompt != ""
+	originalPrompt := strings.TrimSpace(request.OriginalPrompt)
 
 	userMessage := model.Message{
 		ConversationID:  conversationID,
@@ -131,6 +135,7 @@ func (svc *AgentService) SendMessage(userID uint, conversationID uint, request a
 		InputType:       inputType,
 		Content:         content,
 		IsOptimized:     isOptimized,
+		OriginalPrompt:  originalPrompt,
 		OptimizedPrompt: optimizedPrompt,
 	}
 	if err := svc.dao.CreateMessage(&userMessage); err != nil {

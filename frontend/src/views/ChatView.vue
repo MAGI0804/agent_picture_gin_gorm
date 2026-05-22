@@ -2,31 +2,78 @@
   <main class="app-shell compact-shell">
     <section class="chat-page with-left-sidebar">
       <aside class="conversation-sidebar" :style="{ width: sidebarWidth + 'px' }">
-        <header class="sidebar-head">
-          <div class="sidebar-brand">
-            <strong title="图片 AI Agent">图片 AI Agent</strong>
-            <span :title="modelSummary">{{ modelSummary }}</span>
-          </div>
-          <button @click="createConversation">新建</button>
+        <header class="sidebar-head app-brand">
+          <img class="brand-logo sidebar-logo" src="/logo.jpg" alt="平台 Logo" />
         </header>
 
-        <div class="sidebar-nav">
-          <button class="active" @click="router.push('/chat')">对话</button>
-          <button @click="router.push('/settings')">设置</button>
-          <button @click="logout">退出</button>
+        <section class="sidebar-model-card">
+          <div>
+            <span>文本模型</span>
+            <strong :title="selectedTextModelName">{{ selectedTextModelName }}</strong>
+            <small class="model-state">在线</small>
+          </div>
+          <div>
+            <span>图片模型</span>
+            <strong :title="selectedImageModelName">{{ selectedImageModelName }}</strong>
+            <small class="model-state">在线</small>
+          </div>
+        </section>
+
+        <div class="sidebar-actions">
+          <button class="primary new-chat-button" @click="createConversation">+ 新建会话</button>
         </div>
 
-        <nav class="conversation-list">
-          <button
-            v-for="item in conversations"
-            :key="item.id"
-            :class="{ active: item.id === activeConversationId }"
-            @click="openConversation(item.id)"
-          >
-            <span :title="item.title">{{ item.title }}</span>
-            <small>#{{ item.id }}</small>
+        <div class="sidebar-nav">
+          <button class="active" @click="router.push('/chat')">
+            <span class="nav-icon icon-chat" aria-hidden="true"></span>
+            对话
           </button>
-        </nav>
+          <button type="button" @click="router.push('/settings')">
+            <span class="nav-icon icon-settings" aria-hidden="true"></span>
+            设置
+          </button>
+          <button type="button" @click="logout">
+            <span class="nav-icon icon-logout" aria-hidden="true"></span>
+            退出登录
+          </button>
+        </div>
+
+        <section class="conversation-section">
+          <h2>会话列表</h2>
+          <label class="search-box">
+            <span class="sr-only">搜索会话</span>
+            <input placeholder="搜索会话..." />
+          </label>
+          <nav class="conversation-list">
+            <button
+              v-for="item in conversations"
+              :key="item.id"
+              :class="{ active: item.id === activeConversationId }"
+              @click="openConversation(item.id)"
+            >
+              <span :title="item.title">{{ item.title }}</span>
+              <small>{{ formatMessageTime(item.updated_at) }}</small>
+            </button>
+          </nav>
+        </section>
+
+        <footer class="sidebar-user-menu" @click.stop>
+          <button class="sidebar-user-trigger" type="button" @click="userMenuOpen = !userMenuOpen">
+            <div class="avatar">{{ avatarInitial }}</div>
+            <span>{{ userDisplayName }}</span>
+            <i>⌄</i>
+          </button>
+          <div v-if="userMenuOpen" class="user-popover">
+            <button type="button" @click="router.push('/settings'); userMenuOpen = false">
+              <span class="nav-icon icon-settings" aria-hidden="true"></span>
+              设置
+            </button>
+            <button type="button" @click="logout">
+              <span class="nav-icon icon-logout" aria-hidden="true"></span>
+              退出登录
+            </button>
+          </div>
+        </footer>
       </aside>
 
       <div class="resize-handle" @mousedown="startResize('left')" />
@@ -35,10 +82,11 @@
         <header class="chat-header">
           <div>
             <strong :title="activeTitle">{{ activeTitle }}</strong>
-            <span>{{ runStatus }}</span>
+            <span :title="modelSummary">{{ modelSummary }}</span>
           </div>
           <div class="header-actions">
-            <button :disabled="!activeRunId" @click="loadRunEvents">刷新步骤</button>
+            <span class="status-badge">{{ runStatus }}</span>
+            <button class="icon-button" type="button" :disabled="!activeRunId" @click="loadRunEvents">⋮</button>
           </div>
         </header>
 
@@ -72,6 +120,13 @@
               <span>{{ messageModelName(message) }}</span>
               <span>{{ formatMessageTime(message.created_at) }}</span>
             </div>
+            <div
+              v-if="message.is_optimized && message.original_prompt && message.original_prompt !== message.content"
+              class="original-prompt-block"
+            >
+              <strong>原始未优化提示词</strong>
+              <p>{{ message.original_prompt }}</p>
+            </div>
             <p>{{ message.content }}</p>
             <details v-if="message.thinking_content" class="message-thinking-detail">
               <summary>查看思考过程</summary>
@@ -99,15 +154,28 @@
         </div>
 
         <footer class="normal-composer">
-          <label>
-            普通输入
-            <div class="composer-box">
+          <div class="composer-shell">
+            <div class="composer-quick-actions">
+              <button type="button" :disabled="!sendingNormal && !sendingAnswer">× 停止生成</button>
+              <button type="button" :disabled="!canSendNormal" @click="sendNormal()">再试一次</button>
+              <button type="button" @click="normalText = ''">清空上下文</button>
+              <button type="button">清空记忆</button>
+              <button type="button">复制会话</button>
+            </div>
+            <label class="composer-label">
+              <span class="sr-only">输入问题</span>
+              <div class="composer-box">
               <textarea
                 v-model="normalText"
-                placeholder="输入聊天内容，或描述要生成的图片 / HTML 页面。Enter 发送，Shift + Enter 换行。"
+                placeholder="请输入你的问题...（Shift + Enter 换行，Enter 发送）"
                 @keydown.enter.exact.prevent="sendNormal()"
               />
               <div class="composer-tools">
+                <div class="composer-left-tools">
+                  <button type="button" aria-label="上传图片">□</button>
+                  <button type="button" aria-label="新增附件">+</button>
+                  <button type="button" aria-label="上传文件">⇧</button>
+                </div>
                 <select v-model="taskType" aria-label="模式">
                   <option value="text_chat">文本模式</option>
                   <option value="image_generation">图片模式</option>
@@ -144,8 +212,9 @@
                   <button :disabled="sendingNormal" @click="sendNormal(false)">否，使用原提示词</button>
                 </div>
               </div>
-            </div>
-          </label>
+              </div>
+            </label>
+          </div>
         </footer>
       </section>
 
@@ -158,9 +227,18 @@
         </header>
 
         <div class="panel-tabs">
-          <button :class="{ active: rightTab === 'artifacts' }" @click="rightTab = 'artifacts'">产物</button>
-          <button :class="{ active: rightTab === 'messages' }" @click="rightTab = 'messages'">消息</button>
-          <button :class="{ active: rightTab === 'steps' }" @click="rightTab = 'steps'">步骤</button>
+          <button :class="{ active: rightTab === 'artifacts' }" @click="rightTab = 'artifacts'">
+            <span class="nav-icon icon-artifact" aria-hidden="true"></span>
+            产物
+          </button>
+          <button :class="{ active: rightTab === 'messages' }" @click="rightTab = 'messages'">
+            <span class="nav-icon icon-chat" aria-hidden="true"></span>
+            消息
+          </button>
+          <button :class="{ active: rightTab === 'steps' }" @click="rightTab = 'steps'">
+            <span class="nav-icon icon-steps" aria-hidden="true"></span>
+            步骤
+          </button>
         </div>
 
         <section v-if="rightTab === 'artifacts'" class="artifact-list">
@@ -270,7 +348,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { apiFetch, downloadArtifact, setToken } from '../api'
+import { apiFetch, downloadArtifact, getCurrentUser, setCurrentUser, setToken } from '../api'
 import type {
   AgentRun,
   AgentStep,
@@ -279,7 +357,8 @@ import type {
   FollowUpQuestion,
   GlobalModelConfig,
   Message,
-  ModelSelection
+  ModelSelection,
+  UserProfile
 } from '../types'
 
 type TaskType = 'text_chat' | 'image_generation'
@@ -350,6 +429,8 @@ const modelSelection = ref<ModelSelection | null>(null)
 const processTimeline = ref<ProcessTimelineItem[]>([])
 const smartQaOriginalPrompt = ref('')
 const smartQaActive = ref(false)
+const userMenuOpen = ref(false)
+const currentUser = ref<UserProfile | null>(getCurrentUser())
 
 const activeTitle = computed(() => {
   return conversations.value.find(item => item.id === activeConversationId.value)?.title || '新的图片 Agent 会话'
@@ -360,6 +441,22 @@ const modelSummary = computed(() => {
   const text = selection.text_models.find(item => item.id === selection.text_model_config_id)?.model_name || '未选文本模型'
   const image = selection.image_models.find(item => item.id === selection.image_model_config_id)?.model_name || '未选图片模型'
   return `${text} / ${image}`
+})
+const selectedTextModelName = computed(() => {
+  const selection = modelSelection.value
+  if (!selection) return '加载中'
+  return selection.text_models.find(item => item.id === selection.text_model_config_id)?.model_name || '未选择'
+})
+const selectedImageModelName = computed(() => {
+  const selection = modelSelection.value
+  if (!selection) return '加载中'
+  return selection.image_models.find(item => item.id === selection.image_model_config_id)?.model_name || '未选择'
+})
+const userDisplayName = computed(() => {
+  return currentUser.value?.nickname || currentUser.value?.account || '用户'
+})
+const avatarInitial = computed(() => {
+  return Array.from(userDisplayName.value.trim())[0]?.toUpperCase() || 'U'
 })
 const canSendNormal = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value)
 const canOptimizePrompt = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value && !optimizingPrompt.value)
@@ -385,6 +482,7 @@ const selectedImageIndex = ref<number>(0)
 const imageArtifacts = computed(() => artifacts.value.filter(item => item.kind === 'image'))
 
 onMounted(async () => {
+  await loadCurrentUser()
   await loadModelSelection()
   await loadConversations()
 })
@@ -395,6 +493,16 @@ onUnmounted(() => {
 
 async function loadModelSelection() {
   modelSelection.value = await apiFetch<ModelSelection>('/api/settings/model-selection')
+}
+
+async function loadCurrentUser() {
+  try {
+    const user = await apiFetch<UserProfile>('/api/auth/me')
+    currentUser.value = user
+    setCurrentUser(user)
+  } catch (error) {
+    console.error('Load current user error:', error)
+  }
 }
 
 function logout() {
@@ -467,7 +575,8 @@ async function sendNormal(useOptimizedPrompt = false) {
   const isUsingOptimized = Boolean(useOptimizedPrompt && optimizedContent)
   const selectedContent = isUsingOptimized ? optimizedContent : originalContent
   if (sendingNormal.value || !selectedContent) return
-  normalText.value = ''
+  let requestSubmitted = false
+  let localMessageCreated = false
   clearPromptOptimization()
   resetSmartQaState()
   resetProcessTimeline()
@@ -475,8 +584,25 @@ async function sendNormal(useOptimizedPrompt = false) {
   try {
     const conversationId = await ensureConversation()
     if (!conversationId) return
+    if (taskType.value === 'image_generation') {
+      messages.value.push(createLocalMessage(conversationId, 'normal', selectedContent, {
+        isOptimized: isUsingOptimized,
+        originalPrompt: isUsingOptimized ? originalContent : '',
+        optimizedPrompt: isUsingOptimized ? optimizedContent : ''
+      }))
+      localMessageCreated = true
+      appendProcessStep('原始未优化提示词', isUsingOptimized ? originalContent : selectedContent, 'completed')
+    }
     const promptPayload = await preparePromptForTask(selectedContent, isUsingOptimized)
-    messages.value.push(createLocalMessage(conversationId, 'normal', promptPayload.content))
+    normalText.value = ''
+    if (!localMessageCreated) {
+      messages.value.push(createLocalMessage(conversationId, 'normal', promptPayload.content, {
+        isOptimized: promptPayload.isOptimized,
+        originalPrompt: promptPayload.originalPrompt,
+        optimizedPrompt: promptPayload.optimizedPrompt
+      }))
+    }
+    requestSubmitted = true
     showLocalThinking('frontend_dispatch', '已提交请求，等待 Agent 规划下一步。')
     appendProcessStep('已提交用户输入', promptPayload.content, 'completed')
 
@@ -488,6 +614,7 @@ async function sendNormal(useOptimizedPrompt = false) {
         content: promptPayload.content,
         text_model_config_id: selectedTextModelId.value,
         image_model_config_id: taskType.value === 'image_generation' ? selectedImageModelId.value : 0,
+        original_prompt: promptPayload.originalPrompt || (isUsingOptimized ? originalContent : ''),
         is_optimized: promptPayload.isOptimized,
         optimized_prompt: promptPayload.optimizedPrompt,
         stream: true,
@@ -496,6 +623,9 @@ async function sendNormal(useOptimizedPrompt = false) {
     })
     await applySendResponse(data)
   } catch (error) {
+    if (!requestSubmitted) {
+      normalText.value = originalContent
+    }
     appendErrorMessage(error)
   } finally {
     sendingNormal.value = false
@@ -588,6 +718,7 @@ async function preparePromptForTask(content: string, isAlreadyOptimized: boolean
     return {
       content,
       isOptimized: isAlreadyOptimized,
+      originalPrompt: '',
       optimizedPrompt: isAlreadyOptimized ? content : ''
     }
   }
@@ -599,6 +730,7 @@ async function prepareImagePromptForSend(content: string, isAlreadyOptimized: bo
     return {
       content,
       isOptimized: isAlreadyOptimized,
+      originalPrompt: '',
       optimizedPrompt: isAlreadyOptimized ? content : ''
     }
   }
@@ -625,27 +757,28 @@ async function prepareImagePromptForSend(content: string, isAlreadyOptimized: bo
       `原始 ${data.original_length ?? content.length} 字，优化后 ${data.optimized_length ?? optimizedPrompt.length} 字、${promptByteLength(optimizedPrompt)} 字节。`
     )
   } catch (error) {
-    optimizedPrompt = truncatePromptForImage(content)
     completeLastRunningProcessStep(
-      '自动优化降级处理',
-      error instanceof Error ? `${error.message}；已使用 750 字符兜底内容继续。` : '已使用 750 字符兜底内容继续。',
-      'completed'
+      '自动优化失败',
+      error instanceof Error ? error.message : '智能优化失败，请重新提交或缩短提示词。',
+      'failed'
     )
+    throw error instanceof Error ? error : new Error('智能优化失败，请重新提交或缩短提示词。')
   }
 
   if (!fitsImagePromptLimits(optimizedPrompt)) {
-    optimizedPrompt = truncatePromptForImage(optimizedPrompt)
     appendProcessStep(
-      '优化结果长度兜底',
-      `已压缩到 ${optimizedPrompt.length} 字、${promptByteLength(optimizedPrompt)} 字节。`,
-      'completed'
+      '优化结果仍超过图片模型限制',
+      `优化后 ${optimizedPrompt.length} 字、${promptByteLength(optimizedPrompt)} 字节，未发送给图片模型。`,
+      'failed'
     )
+    throw new Error('智能优化后的提示词仍超过图片模型限制，请缩短内容后重试。')
   }
 
   appendProcessStep('最终发送给图片模型的提示词', optimizedPrompt, 'completed')
   return {
     content: optimizedPrompt,
     isOptimized: true,
+    originalPrompt: content,
     optimizedPrompt
   }
 }
@@ -658,18 +791,6 @@ function promptByteLength(content: string) {
   return new TextEncoder().encode(content).length
 }
 
-function truncatePromptForImage(content: string) {
-  let result = ''
-  for (const char of content) {
-    const next = result + char
-    if (next.length > IMAGE_PROMPT_LIMIT || promptByteLength(next) > IMAGE_PROMPT_BYTE_LIMIT) {
-      break
-    }
-    result = next
-  }
-  return result.trim()
-}
-
 async function sendAnswer() {
   if (sendingAnswer.value || !activeConversationId.value || !answerText.value.trim()) return
   const conversationId = activeConversationId.value
@@ -677,12 +798,14 @@ async function sendAnswer() {
   const questionsSnapshot = [...pendingQuestions.value]
   const answeredQuestionIds = questionsSnapshot.map(question => question.id)
   const mergedContent = buildQuestionAnswerPrompt(smartQaOriginalPrompt.value, questionsSnapshot, rawAnswer)
-  answerText.value = ''
+  let requestSubmitted = false
   sendingAnswer.value = true
   try {
     appendProcessStep('已收到补充回答', rawAnswer, 'completed')
     const promptPayload = await prepareImagePromptForSend(mergedContent, false)
+    answerText.value = ''
     messages.value.push(createLocalMessage(conversationId, 'answer_to_questions', rawAnswer))
+    requestSubmitted = true
     showLocalThinking('frontend_dispatch', '已提交补充回答，继续执行生成流程。')
     appendProcessStep('已提交图片模型', promptPayload.content, 'completed')
 
@@ -706,6 +829,9 @@ async function sendAnswer() {
     resetSmartQaState()
     await applySendResponse(data)
   } catch (error) {
+    if (!requestSubmitted) {
+      answerText.value = rawAnswer
+    }
     appendErrorMessage(error)
   } finally {
     sendingAnswer.value = false
@@ -883,7 +1009,12 @@ function buildQuestionAnswerPrompt(
   ].join('\n')
 }
 
-function createLocalMessage(conversationId: number, inputType: string, content: string): Message {
+function createLocalMessage(
+  conversationId: number,
+  inputType: string,
+  content: string,
+  options: { isOptimized?: boolean; originalPrompt?: string; optimizedPrompt?: string } = {}
+): Message {
   return {
     id: -Date.now(),
     conversation_id: conversationId,
@@ -891,8 +1022,9 @@ function createLocalMessage(conversationId: number, inputType: string, content: 
     role: 'user',
     input_type: inputType,
     content,
-    is_optimized: false,
-    optimized_prompt: '',
+    is_optimized: Boolean(options.isOptimized),
+    original_prompt: options.originalPrompt || '',
+    optimized_prompt: options.optimizedPrompt || '',
     agent_run_id: 0,
     created_at: Math.floor(Date.now() / 1000),
     updated_at: Math.floor(Date.now() / 1000)

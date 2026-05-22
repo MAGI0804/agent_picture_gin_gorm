@@ -16,7 +16,7 @@ type User struct {
 	// 手机号   UNI varchar(40) is_nullable: YES
 	Phone string `gorm:"column:phone;unique;" json:"phone"`
 	// 密码    varchar(255) is_nullable: NO
-	Password string `gorm:"column:password;" json:"password"`
+	Password string `gorm:"column:password;" json:"-"`
 	// 昵称   MUL varchar(255) is_nullable: NO
 	Nickname string `gorm:"column:nickname;" json:"nickname"`
 	// 自我简介    text is_nullable: YES

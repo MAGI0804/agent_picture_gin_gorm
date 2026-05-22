@@ -605,7 +605,10 @@ func (provider *HTTPProvider) generateJimengImage(
 	}
 
 	// 准备最终的 prompt
-	finalPrompt := truncateForJimengPrompt(request.Prompt)
+	finalPrompt, err := normalizeJimengPrompt(request.Prompt)
+	if err != nil {
+		return nil, err
+	}
 	logger.Info("[Jimeng Provider] 最终发送的 prompt",
 		zap.String("final_prompt", finalPrompt),
 		zap.Int("final_prompt_length", len([]rune(finalPrompt))),
@@ -824,14 +827,14 @@ func runtimeConfigBool(config model.UserModelConfig, key string) bool {
 	}
 }
 
-func truncateForJimengPrompt(prompt string) string {
+func normalizeJimengPrompt(prompt string) (string, error) {
 	// 先去除 markdown 格式
 	cleaned := strings.TrimSpace(prompt)
 
 	if promptFitsImageLimits(cleaned) {
-		return cleaned
+		return cleaned, nil
 	}
-	return truncatePromptForImageModel(cleaned)
+	return "", errors.New("图片提示词仍超过即梦模型限制，已终止生成；未截断用户输入")
 }
 
 func (provider *HTTPProvider) parseOpenAIImageFile(body []byte, prompt string) (GeneratedFile, error) {

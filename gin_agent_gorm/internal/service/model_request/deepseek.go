@@ -348,7 +348,7 @@ func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength
 		Stream:          false,
 		ReturnReasoning: false,
 		Temperature:     0.7, // 使用适中的温度
-		MaxTokens:       1000,
+		MaxTokens:       4096,
 	}
 
 	result, err := SendDeepseekRequest(url, apiKey, "deepseek-v4-pro", request)
@@ -358,6 +358,12 @@ func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength
 
 	optimizedPrompt := strings.TrimSpace(result.Content)
 	if optimizedPrompt == "" {
+		if strings.TrimSpace(result.ReasoningContent) != "" {
+			return "", errors.Errorf(
+				"optimized prompt is empty; model returned reasoning but no final content, finish_reason=%s",
+				result.FinishReason,
+			)
+		}
 		return "", errors.New("optimized prompt is empty")
 	}
 

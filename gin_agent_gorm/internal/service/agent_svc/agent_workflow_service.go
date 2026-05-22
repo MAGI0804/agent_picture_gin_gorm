@@ -483,7 +483,9 @@ func (svc *AgentService) prepareGenerationPromptInput(
 ) (string, string, string, error) {
 	optimizedPrompt := strings.TrimSpace(request.OptimizedPrompt)
 	if request.IsOptimized && optimizedPrompt != "" {
-		optimizedPrompt = truncatePromptForImageModel(optimizedPrompt)
+		if !promptFitsImageLimits(optimizedPrompt) {
+			return "", "", "", errors.New("智能优化后的提示词仍超过图片模型限制，请重新优化或缩短输入")
+		}
 		return optimizedPrompt, optimizedPrompt, "用户确认使用智能优化后的提示词；后端已校验图片模型长度限制。", nil
 	}
 
@@ -500,16 +502,27 @@ func (svc *AgentService) prepareGenerationPromptInput(
 
 	optimized, err := svc.optimizePromptWithDeepseek(userID, content, imagePromptTargetLength, "shorten")
 	if err != nil {
-		logger.Warn("[Prompt Agent] 自动优化失败，使用长度兜底",
+		logger.Warn("[Prompt Agent] 自动优化失败，终止图片生成",
 			zap.Uint("user_id", userID),
 			zap.Uint("message_id", userMessage.ID),
 			zap.Uint("run_id", run.ID),
 			zap.Error(err),
 		)
-		optimized = truncatePromptForImageModel(content)
+		_ = svc.createStepWithThinking(
+			run.ID,
+			"auto_prompt_optimize_agent",
+			content,
+			"",
+			"图片提示词超过限制，自动调用 deepseek-v4-pro 优化失败，已终止生成；未截断用户输入。",
+			err.Error(),
+		)
+		return "", "", "", errors.Wrap(err, "智能优化失败，请重试或缩短提示词")
 	}
 
 	optimized = strings.TrimSpace(optimized)
+	if optimized == "" {
+		return "", "", "", errors.New("智能优化失败：优化结果为空")
+	}
 	if !promptFitsImageLimits(optimized) {
 		secondPass, secondErr := svc.optimizePromptWithDeepseek(
 			userID,
@@ -521,9 +534,16 @@ func (svc *AgentService) prepareGenerationPromptInput(
 			optimized = strings.TrimSpace(secondPass)
 		}
 	}
-	optimized = truncatePromptForImageModel(optimized)
-	if optimized == "" {
-		optimized = truncatePromptForImageModel(content)
+	if !promptFitsImageLimits(optimized) {
+		_ = svc.createStepWithThinking(
+			run.ID,
+			"auto_prompt_optimize_agent",
+			content,
+			optimized,
+			fmt.Sprintf("图片提示词超过限制，自动优化后仍为 %d 字符、%d 字节，已终止生成；未截断用户输入。", len([]rune(optimized)), len(optimized)),
+			"",
+		)
+		return "", "", "", errors.New("智能优化后的提示词仍超过图片模型限制，请缩短内容后重试")
 	}
 
 	reason := fmt.Sprintf(
@@ -556,63 +576,27 @@ func (svc *AgentService) ensureImagePromptLength(
 		return prompt, nil
 	}
 
-	logger.Warn("[Prompt Agent] 最终图片提示词过长，执行长度兜底",
+	logger.Warn("[Prompt Agent] 最终图片提示词过长，终止图片生成",
 		zap.Uint("user_id", userID),
 		zap.Uint("message_id", userMessage.ID),
 		zap.Uint("run_id", run.ID),
 		zap.Int("prompt_length", len([]rune(prompt))),
 		zap.Int("prompt_bytes", len(prompt)),
 	)
-	prompt = truncatePromptForImageModel(prompt)
 	_ = svc.createStepWithThinking(
 		run.ID,
 		"image_prompt_length_check_agent",
 		"",
-		prompt,
-		fmt.Sprintf("最终图片提示词超过限制，已自动压缩到 %d 字符、%d 字节。", len([]rune(prompt)), len(prompt)),
+		"",
+		fmt.Sprintf("最终图片提示词超过限制：%d 字符、%d 字节，已终止生成；未截断用户输入。", len([]rune(prompt)), len(prompt)),
 		"",
 	)
-	return prompt, nil
+	return "", errors.New("最终图片提示词仍超过图片模型限制，请重新优化或缩短输入")
 }
 
 func promptFitsImageLimits(prompt string) bool {
 	prompt = strings.TrimSpace(prompt)
 	return len([]rune(prompt)) <= imagePromptTargetLength && len(prompt) <= imagePromptTargetBytes
-}
-
-func truncatePromptForImageModel(prompt string) string {
-	prompt = truncatePromptRunes(prompt, imagePromptTargetLength)
-	return truncatePromptBytes(prompt, imagePromptTargetBytes)
-}
-
-func truncatePromptRunes(prompt string, limit int) string {
-	prompt = strings.TrimSpace(prompt)
-	if limit <= 0 {
-		return prompt
-	}
-	runes := []rune(prompt)
-	if len(runes) <= limit {
-		return prompt
-	}
-	return strings.TrimSpace(string(runes[:limit]))
-}
-
-func truncatePromptBytes(prompt string, limit int) string {
-	prompt = strings.TrimSpace(prompt)
-	if limit <= 0 || len(prompt) <= limit {
-		return prompt
-	}
-	var used int
-	var builder strings.Builder
-	for _, r := range prompt {
-		part := string(r)
-		if used+len(part) > limit {
-			break
-		}
-		builder.WriteString(part)
-		used += len(part)
-	}
-	return strings.TrimSpace(builder.String())
 }
 
 func normalizePromptTargetLength(targetLength int) int {

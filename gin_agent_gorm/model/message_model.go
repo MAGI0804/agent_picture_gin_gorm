@@ -11,6 +11,7 @@ type Message struct {
 	InputType       string `gorm:"column:input_type;size:64" json:"input_type"`                  // 输入类型：normal、answer_to_questions 等。
 	Content         string `gorm:"column:content;type:text;not null" json:"content"`             // 消息正文。
 	IsOptimized     bool   `gorm:"column:is_optimized;not null;default:false" json:"is_optimized"`
+	OriginalPrompt  string `gorm:"column:original_prompt;type:text" json:"original_prompt"`
 	OptimizedPrompt string `gorm:"column:optimized_prompt;type:text" json:"optimized_prompt"`
 	AgentRunID      uint   `gorm:"column:agent_run_id;index" json:"agent_run_id"` // 关联的 Agent Run ID。
 	CommonTimestampsField
