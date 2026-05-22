@@ -14,22 +14,25 @@ import (
 	"gin-biz-web-api/model"
 )
 
-var deepseekHTTPClient = &http.Client{Timeout: 120 * time.Second}
+var deepseekHTTPClient = &http.Client{Timeout: 300 * time.Second}
 
 // DeepseekChatRequest Deepseek 模型聊天请求参数。
 type DeepseekChatRequest struct {
-	System          string            `json:"system"`
+	System          string            `json:"system,omitempty"`
 	Messages        []DeepseekMessage `json:"messages"`
 	Stream          bool              `json:"stream"`
-	ReturnReasoning bool              `json:"return_reasoning"`
+	ReturnReasoning bool              `json:"return_reasoning,omitempty"`
+	ReasoningEffort string            `json:"reasoning_effort,omitempty"`
 	Temperature     float64           `json:"temperature"`
-	MaxTokens       int               `json:"max_tokens"`
+	MaxTokens       int               `json:"max_tokens,omitempty"`
+	Tools           []interface{}     `json:"tools,omitempty"`
 }
 
 // DeepseekMessage Deepseek 消息结构。
 type DeepseekMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content,omitempty"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // DeepseekChatResult Deepseek 模型聊天响应结果。
@@ -65,10 +68,24 @@ func SendDeepseekRequest(url, apiKey, modelName string, request DeepseekChatRequ
 	endpoint := buildEndpoint(url)
 
 	payload := map[string]interface{}{
-		"model":            modelName,
-		"stream":           request.Stream,
-		"return_reasoning": request.ReturnReasoning,
-		"temperature":      request.Temperature,
+		"model":       modelName,
+		"stream":      request.Stream,
+		"temperature": request.Temperature,
+	}
+
+	// 添加 thinking 参数到 extra_body
+	if request.ReturnReasoning {
+		payload["return_reasoning"] = true
+		payload["extra_body"] = map[string]interface{}{
+			"thinking": map[string]interface{}{
+				"type": "enabled",
+			},
+		}
+	}
+
+	// 添加 reasoning_effort 参数
+	if strings.TrimSpace(request.ReasoningEffort) != "" {
+		payload["reasoning_effort"] = request.ReasoningEffort
 	}
 
 	if request.MaxTokens > 0 {
@@ -79,18 +96,29 @@ func SendDeepseekRequest(url, apiKey, modelName string, request DeepseekChatRequ
 		payload["system"] = request.System
 	}
 
+	// 添加 tools 参数
+	if len(request.Tools) > 0 {
+		payload["tools"] = request.Tools
+	}
+
 	if len(request.Messages) > 0 {
-		messages := make([]map[string]string, 0, len(request.Messages))
+		messages := make([]map[string]interface{}, 0, len(request.Messages))
 		for _, msg := range request.Messages {
 			role := normalizeRole(msg.Role)
 			content := strings.TrimSpace(msg.Content)
-			if content == "" {
+			if content == "" && strings.TrimSpace(msg.ReasoningContent) == "" {
 				continue
 			}
-			messages = append(messages, map[string]string{
-				"role":    role,
-				"content": content,
-			})
+			messageMap := map[string]interface{}{
+				"role": role,
+			}
+			if content != "" {
+				messageMap["content"] = content
+			}
+			if strings.TrimSpace(msg.ReasoningContent) != "" {
+				messageMap["reasoning_content"] = msg.ReasoningContent
+			}
+			messages = append(messages, messageMap)
 		}
 		if len(messages) == 0 {
 			return DeepseekChatResult{}, errors.New("no valid messages in request")
@@ -154,6 +182,7 @@ func SendDeepseekSimple(url, apiKey, modelName, userPrompt string, returnReasoni
 		},
 		Stream:          false,
 		ReturnReasoning: returnReasoning,
+		ReasoningEffort: "high", // 使用高质量推理
 		Temperature:     0.7,
 		MaxTokens:       4096,
 	}
@@ -301,12 +330,15 @@ func truncate(value string, limit int) string {
 // 返回:
 //   - string: 优化后的提示词
 //   - error: 错误信息
-func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength int, optimizationType string) (string, error) {
+func OptimizePromptWithDeepseek(url, apiKey, modelName, originalPrompt string, targetLength int, optimizationType string) (string, error) {
 	if strings.TrimSpace(url) == "" {
 		return "", errors.New("url cannot be empty")
 	}
 	if strings.TrimSpace(apiKey) == "" {
 		return "", errors.New("apiKey cannot be empty")
+	}
+	if strings.TrimSpace(modelName) == "" {
+		return "", errors.New("modelName cannot be empty")
 	}
 	if strings.TrimSpace(originalPrompt) == "" {
 		return "", errors.New("originalPrompt cannot be empty")
@@ -347,11 +379,12 @@ func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength
 		},
 		Stream:          false,
 		ReturnReasoning: false,
-		Temperature:     0.7, // 使用适中的温度
+		ReasoningEffort: "high", // 使用高质量推理
+		Temperature:     0.7,    // 使用适中的温度
 		MaxTokens:       4096,
 	}
 
-	result, err := SendDeepseekRequest(url, apiKey, "deepseek-v4-pro", request)
+	result, err := SendDeepseekRequest(url, apiKey, modelName, request)
 	if err != nil {
 		return "", errors.Wrap(err, "failed to optimize prompt with Deepseek")
 	}
@@ -372,6 +405,6 @@ func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength
 
 // ShortenImagePrompt 专用方法：智能缩短图片生成提示词到目标长度
 // 这是 OptimizePromptWithDeepseek 的便捷包装方法
-func ShortenImagePrompt(url, apiKey, originalPrompt string, maxLength int) (string, error) {
-	return OptimizePromptWithDeepseek(url, apiKey, originalPrompt, maxLength, "shorten")
+func ShortenImagePrompt(url, apiKey, modelName, originalPrompt string, maxLength int) (string, error) {
+	return OptimizePromptWithDeepseek(url, apiKey, modelName, originalPrompt, maxLength, "shorten")
 }

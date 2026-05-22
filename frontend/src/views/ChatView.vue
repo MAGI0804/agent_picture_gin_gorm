@@ -127,6 +127,13 @@
               <strong>原始未优化提示词</strong>
               <p>{{ message.original_prompt }}</p>
             </div>
+            <details
+              v-if="message.is_optimized && message.optimized_prompt"
+              class="optimized-prompt-detail"
+            >
+              <summary>优化后的提示词</summary>
+              <p>{{ message.optimized_prompt }}</p>
+            </details>
             <p>{{ message.content }}</p>
             <details v-if="message.thinking_content" class="message-thinking-detail">
               <summary>查看思考过程</summary>
@@ -165,53 +172,53 @@
             <label class="composer-label">
               <span class="sr-only">输入问题</span>
               <div class="composer-box">
-              <textarea
-                v-model="normalText"
-                placeholder="请输入你的问题...（Shift + Enter 换行，Enter 发送）"
-                @keydown.enter.exact.prevent="sendNormal()"
-              />
-              <div class="composer-tools">
-                <div class="composer-left-tools">
-                  <button type="button" aria-label="上传图片">□</button>
-                  <button type="button" aria-label="新增附件">+</button>
-                  <button type="button" aria-label="上传文件">⇧</button>
-                </div>
-                <select v-model="taskType" aria-label="模式">
-                  <option value="text_chat">文本模式</option>
-                  <option value="image_generation">图片模式</option>
-                </select>
-                <select :value="currentModelId" aria-label="模型" @change="saveComposerModelSelection">
-                  <option :value="0">未选择模型</option>
-                  <option v-for="item in activeModelOptions" :key="item.id" :value="item.id">
-                    {{ item.model_name }}
-                  </option>
-                </select>
-                <button :disabled="!canSendNormal" @click="sendNormal()">发送</button>
-                <button class="secondary-action" :disabled="!canOptimizePrompt" @click="optimizeNormalPrompt">
-                  {{ optimizingPrompt ? '优化中...' : '智能优化' }}
-                </button>
-                <button class="secondary-action" :disabled="!canStartSmartQa" @click="startSmartQa">
-                  智能问答
-                </button>
-              </div>
-              <div v-if="optimizedPromptText || optimizationError || optimizingPrompt" class="optimization-panel">
-                <div class="optimization-header">
-                  <strong>优化后的提示词</strong>
-                  <span v-if="optimizedPromptText">{{ optimizedPromptText.length }} 字</span>
-                </div>
                 <textarea
-                  v-if="optimizedPromptText"
-                  v-model="optimizedPromptText"
-                  aria-label="优化后的提示词"
+                  v-model="normalText"
+                  placeholder="发消息..."
+                  @keydown.enter.exact.prevent="sendNormal()"
                 />
-                <p v-if="optimizationError" class="optimization-error">{{ optimizationError }}</p>
-                <div v-if="optimizedPromptText" class="optimization-actions">
-                  <button class="primary" :disabled="sendingNormal || !optimizedPromptText.trim()" @click="sendNormal(true)">
-                    是，使用优化后提问
+                <div class="composer-tools">
+                  <div class="composer-left-tools">
+                    <button type="button" aria-label="上传图片">□</button>
+                    <button type="button" aria-label="新增附件">+</button>
+                    <button type="button" aria-label="上传文件">⇧</button>
+                  </div>
+                  <select v-model="taskType" aria-label="模式">
+                    <option value="text_chat">文本模式</option>
+                    <option value="image_generation">图片模式</option>
+                  </select>
+                  <select :value="currentModelId" aria-label="模型" @change="saveComposerModelSelection">
+                    <option :value="0">未选择模型</option>
+                    <option v-for="item in activeModelOptions" :key="item.id" :value="item.id">
+                      {{ item.model_name }}
+                    </option>
+                  </select>
+                  <button :disabled="!canSendNormal" @click="sendNormal()">发送</button>
+                  <button class="secondary-action" :disabled="!canOptimizePrompt" @click="optimizeNormalPrompt">
+                    {{ optimizingPrompt ? '优化中...' : '智能优化' }}
                   </button>
-                  <button :disabled="sendingNormal" @click="sendNormal(false)">否，使用原提示词</button>
+                  <button class="secondary-action" :disabled="!canStartSmartQa" @click="startSmartQa">
+                    智能问答
+                  </button>
                 </div>
-              </div>
+                <div v-if="optimizedPromptText || optimizationError || optimizingPrompt" class="optimization-panel">
+                  <div class="optimization-header">
+                    <strong>优化后的提示词</strong>
+                    <span v-if="optimizedPromptText">{{ optimizedPromptText.length }} 字</span>
+                  </div>
+                  <textarea
+                    v-if="optimizedPromptText"
+                    v-model="optimizedPromptText"
+                    aria-label="优化后的提示词"
+                  />
+                  <p v-if="optimizationError" class="optimization-error">{{ optimizationError }}</p>
+                  <div v-if="optimizedPromptText" class="optimization-actions">
+                    <button class="primary" :disabled="sendingNormal || !optimizedPromptText.trim()" @click="sendNormal(true)">
+                      是，使用优化后提问
+                    </button>
+                    <button :disabled="sendingNormal" @click="sendNormal(false)">否，使用原提示词</button>
+                  </div>
+                </div>
               </div>
             </label>
           </div>
@@ -254,10 +261,10 @@
 
           <p v-if="!artifacts.length && !processTimeline.length" class="muted">暂无产物。发起图片或 HTML 生成后会显示在这里。</p>
           
-          <!-- 图片生成中/等待状态显示 -->
+          <!-- 生成中/等待状态显示 -->
           <div v-if="sendingNormal || sendingAnswer" class="generating-status">
             <div class="spinner"></div>
-            <span>任务提交成功，正在构建图片...</span>
+            <span>{{ generatingStatusText }}</span>
           </div>
           
           <!-- 多图片展示区域 -->
@@ -416,6 +423,7 @@ const normalText = ref('')
 const taskType = ref<TaskType>('text_chat')
 const sendingNormal = ref(false)
 const sendingAnswer = ref(false)
+const activeSendingTaskType = ref<TaskType>('text_chat')
 const optimizingPrompt = ref(false)
 const optimizedPromptText = ref('')
 const optimizationError = ref('')
@@ -458,6 +466,25 @@ const userDisplayName = computed(() => {
 const avatarInitial = computed(() => {
   return Array.from(userDisplayName.value.trim())[0]?.toUpperCase() || 'U'
 })
+const generatingStatusText = computed(() => {
+  if (sendingAnswer.value || activeSendingTaskType.value === 'image_generation') {
+    return '任务提交成功，正在生成图片...'
+  }
+  return '任务提交成功，正在生成回复...'
+})
+function selectedModelNameForTask(type: TaskType) {
+  const selection = modelSelection.value
+  if (!selection) return '模型未记录'
+  if (type === 'image_generation') {
+    return selection.image_models.find(item => item.id === selection.image_model_config_id)?.model_name || '模型未记录'
+  }
+  return selection.text_models.find(item => item.id === selection.text_model_config_id)?.model_name || '模型未记录'
+}
+
+function dialogLabelForTask(type: TaskType) {
+  return type === 'image_generation' ? '图片问答' : '文本问答'
+}
+
 const canSendNormal = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value)
 const canOptimizePrompt = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value && !optimizingPrompt.value)
 const canStartSmartQa = computed(() => {
@@ -580,6 +607,7 @@ async function sendNormal(useOptimizedPrompt = false) {
   clearPromptOptimization()
   resetSmartQaState()
   resetProcessTimeline()
+  activeSendingTaskType.value = taskType.value
   sendingNormal.value = true
   try {
     const conversationId = await ensureConversation()
@@ -588,7 +616,9 @@ async function sendNormal(useOptimizedPrompt = false) {
       messages.value.push(createLocalMessage(conversationId, 'normal', selectedContent, {
         isOptimized: isUsingOptimized,
         originalPrompt: isUsingOptimized ? originalContent : '',
-        optimizedPrompt: isUsingOptimized ? optimizedContent : ''
+        optimizedPrompt: isUsingOptimized ? optimizedContent : '',
+        displayModelName: selectedModelNameForTask(taskType.value),
+        displayDialogType: dialogLabelForTask(taskType.value)
       }))
       localMessageCreated = true
       appendProcessStep('原始未优化提示词', isUsingOptimized ? originalContent : selectedContent, 'completed')
@@ -599,7 +629,9 @@ async function sendNormal(useOptimizedPrompt = false) {
       messages.value.push(createLocalMessage(conversationId, 'normal', promptPayload.content, {
         isOptimized: promptPayload.isOptimized,
         originalPrompt: promptPayload.originalPrompt,
-        optimizedPrompt: promptPayload.optimizedPrompt
+        optimizedPrompt: promptPayload.optimizedPrompt,
+        displayModelName: selectedModelNameForTask(taskType.value),
+        displayDialogType: dialogLabelForTask(taskType.value)
       }))
     }
     requestSubmitted = true
@@ -666,6 +698,7 @@ async function startSmartQa() {
   const content = normalText.value.trim()
   if (sendingNormal.value || !content) return
   taskType.value = 'image_generation'
+  activeSendingTaskType.value = 'image_generation'
   normalText.value = ''
   clearPromptOptimization()
   resetProcessTimeline()
@@ -676,7 +709,10 @@ async function startSmartQa() {
   try {
     const conversationId = await ensureConversation()
     if (!conversationId) return
-    messages.value.push(createLocalMessage(conversationId, 'normal', content))
+    messages.value.push(createLocalMessage(conversationId, 'normal', content, {
+      displayModelName: selectedModelNameForTask('text_chat'),
+      displayDialogType: '智能问答'
+    }))
     appendProcessStep('进入智能问答', `原始需求：${content}`, 'completed')
     appendProcessStep('正在生成针对性问题', '调用 deepseek-v4-pro 输出图片生成前需要确认的问题。', 'running')
     showLocalThinking('smart_question_agent', '正在根据用户需求生成针对性问题。')
@@ -799,12 +835,16 @@ async function sendAnswer() {
   const answeredQuestionIds = questionsSnapshot.map(question => question.id)
   const mergedContent = buildQuestionAnswerPrompt(smartQaOriginalPrompt.value, questionsSnapshot, rawAnswer)
   let requestSubmitted = false
+  activeSendingTaskType.value = 'image_generation'
   sendingAnswer.value = true
   try {
     appendProcessStep('已收到补充回答', rawAnswer, 'completed')
     const promptPayload = await prepareImagePromptForSend(mergedContent, false)
     answerText.value = ''
-    messages.value.push(createLocalMessage(conversationId, 'answer_to_questions', rawAnswer))
+    messages.value.push(createLocalMessage(conversationId, 'answer_to_questions', rawAnswer, {
+      displayModelName: selectedModelNameForTask('image_generation'),
+      displayDialogType: '补充回答'
+    }))
     requestSubmitted = true
     showLocalThinking('frontend_dispatch', '已提交补充回答，继续执行生成流程。')
     appendProcessStep('已提交图片模型', promptPayload.content, 'completed')
@@ -1013,7 +1053,13 @@ function createLocalMessage(
   conversationId: number,
   inputType: string,
   content: string,
-  options: { isOptimized?: boolean; originalPrompt?: string; optimizedPrompt?: string } = {}
+  options: {
+    isOptimized?: boolean
+    originalPrompt?: string
+    optimizedPrompt?: string
+    displayModelName?: string
+    displayDialogType?: string
+  } = {}
 ): Message {
   return {
     id: -Date.now(),
@@ -1025,6 +1071,8 @@ function createLocalMessage(
     is_optimized: Boolean(options.isOptimized),
     original_prompt: options.originalPrompt || '',
     optimized_prompt: options.optimizedPrompt || '',
+    display_model_name: options.displayModelName || '',
+    display_dialog_type: options.displayDialogType || '',
     agent_run_id: 0,
     created_at: Math.floor(Date.now() / 1000),
     updated_at: Math.floor(Date.now() / 1000)
@@ -1122,6 +1170,7 @@ function runMetaForMessage(message: Message) {
 }
 
 function dialogTypeLabel(message: Message) {
+  if (message.display_dialog_type) return message.display_dialog_type
   const run = runMetaForMessage(message)
   const taskType = run?.task_type || run?.intent || ''
   if (message.input_type === 'answer_to_questions') return '补充回答'
@@ -1134,6 +1183,7 @@ function dialogTypeLabel(message: Message) {
 }
 
 function messageModelName(message: Message) {
+  if (message.display_model_name) return message.display_model_name
   const run = runMetaForMessage(message)
   if (message.input_type === 'follow_up_questions' && run?.text_model_name) {
     return run.text_model_name
@@ -1144,11 +1194,7 @@ function messageModelName(message: Message) {
   if (run?.text_model_name) return run.text_model_name
   if (run?.image_model_name) return run.image_model_name
 
-  const selection = modelSelection.value
-  if (!selection) return '模型待记录'
-  const options = [...selection.text_models, ...selection.image_models]
-  const modelID = taskType.value === 'image_generation' ? selection.image_model_config_id : selection.text_model_config_id
-  return options.find(item => item.id === modelID)?.model_name || '模型待记录'
+  return '模型未记录'
 }
 
 function formatMessageTime(timestamp?: number) {

@@ -175,6 +175,18 @@ func (svc *AgentService) firstAvailableUserGlobalModelConfig(userID uint, modelK
 	if err != nil || len(configs) == 0 {
 		return model.ModelConfig{}, false
 	}
+
+	// 对于文本模型，优先查找 deepseek-v4-pro
+	if modelKind != "image" {
+		for _, cfg := range configs {
+			modelName := strings.ToLower(strings.TrimSpace(cfg.ModelName))
+			if strings.Contains(modelName, "deepseek-v4-pro") || strings.Contains(modelName, "deepseek_v4_pro") {
+				return cfg, true
+			}
+		}
+	}
+
+	// 如果没找到，返回第一个可用的
 	return configs[0], true
 }
 
@@ -899,11 +911,12 @@ func (svc *AgentService) optimizePromptWithDeepseek(userID uint, prompt string, 
 
 	logger.Info("[Prompt Agent] 找到 deepseek-v4-pro 配置，准备调用专门的提示词优化方法",
 		zap.String("api_url", apiURL),
+		zap.String("model_name", deepseekConfig.ModelName),
 		zap.Int("user_id", int(userID)),
 	)
 
-	// 调用专门的 deepseek 提示词缩短方法
-	return model_request.OptimizePromptWithDeepseek(apiURL, apiKey, prompt, maxLength, optimizationType)
+	// 调用专门的 deepseek 提示词缩短方法，使用配置中的实际模型名称
+	return model_request.OptimizePromptWithDeepseek(apiURL, apiKey, deepseekConfig.ModelName, prompt, maxLength, optimizationType)
 }
 
 // findDeepseekV4ProConfig 查找 deepseek-v4-pro 的模型配置

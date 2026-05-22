@@ -17,7 +17,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var jimengHTTPClient = &http.Client{Timeout: 60 * time.Second}
+var jimengHTTPClient = &http.Client{Timeout: 120 * time.Second}
 
 const (
 	JimengReqKey           = "jimeng_seedream46_cvtob"

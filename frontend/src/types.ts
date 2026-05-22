@@ -36,6 +36,8 @@ export interface Message {
   original_prompt?: string
   optimized_prompt?: string
   thinking_content?: string
+  display_model_name?: string
+  display_dialog_type?: string
   agent_run_id: number
   created_at: number
   updated_at: number

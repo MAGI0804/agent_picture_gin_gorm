@@ -729,13 +729,13 @@ p {
   flex: 1;
   min-width: 420px;
   min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   background: #ffffff;
 }
 
 .chat-main {
-  grid-template-rows: auto auto 1fr auto;
+  min-height: 0;
 }
 
 .chat-header,
@@ -845,8 +845,10 @@ p {
 
 .messages {
   display: grid;
+  flex: 1 1 auto;
   align-content: start;
   gap: 12px;
+  min-height: 0;
   overflow: auto;
   padding: 18px 16px;
   background: #ffffff;
@@ -896,6 +898,30 @@ p {
   overflow: auto;
   margin: 0;
   color: #451a03;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.optimized-prompt-detail {
+  margin-top: 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 7px;
+  background: #eff6ff;
+  padding: 10px;
+}
+
+.optimized-prompt-detail summary {
+  cursor: pointer;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.optimized-prompt-detail p {
+  max-height: 180px;
+  overflow: auto;
+  margin: 8px 0 0;
+  color: #1e3a8a;
   font-size: 12px;
   line-height: 1.6;
 }
@@ -957,15 +983,16 @@ p {
 }
 
 .normal-composer {
-  padding: 0 14px 14px;
-  border-top: 1px solid var(--line);
+  flex: 0 0 auto;
+  padding: 10px 22px 18px;
+  border-top: 0;
   background: #ffffff;
 }
 
 .composer-shell {
   display: grid;
-  gap: 10px;
-  padding-top: 10px;
+  gap: 8px;
+  max-width: 100%;
 }
 
 .composer-quick-actions {
@@ -991,28 +1018,37 @@ p {
 
 .composer-box {
   display: grid;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  gap: 14px;
+  border: 1px solid #afd0ff;
+  border-radius: 28px;
   background: #ffffff;
-  padding: 10px;
+  padding: 18px 24px 14px;
+  box-shadow: 0 16px 36px rgba(54, 103, 176, 0.08);
 }
 
 .composer-box textarea {
-  min-height: 82px;
+  min-height: 38px;
+  max-height: 140px;
   border: 0;
   border-radius: 0;
   padding: 0;
-  resize: vertical;
+  resize: none;
+  color: #30343b;
+  font-size: 20px;
+  line-height: 1.45;
 }
 
 .composer-box textarea:focus {
   box-shadow: none;
 }
 
+.composer-box textarea::placeholder {
+  color: #a3a8b0;
+}
+
 .composer-tools {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
@@ -1020,14 +1056,20 @@ p {
 
 .composer-left-tools {
   display: flex;
-  gap: 7px;
+  gap: 8px;
   margin-right: auto;
+  padding-right: 10px;
+  border-right: 1px solid #e2e5ea;
 }
 
 .composer-left-tools button {
-  width: 30px;
-  min-height: 30px;
+  width: 32px;
+  min-height: 32px;
   padding: 0;
+  border: 0;
+  background: transparent;
+  color: #151922;
+  font-size: 20px;
 }
 
 .composer-tools select {

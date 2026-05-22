@@ -64,7 +64,7 @@ func init() {
 			"timezone": config.Get("App.Timezone", "Asia/Shanghai"),
 
 			// 上下文超时时间（单位：s）
-			"context_timeout": config.Get("App.ContextTimeout", 60),
+			"context_timeout": config.Get("App.ContextTimeout", 300),
 		}
 	})
 }
