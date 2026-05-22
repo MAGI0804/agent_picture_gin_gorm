@@ -134,6 +134,18 @@ func (dao *AgentDAO) UpdateAgentRun(runID uint, attrs map[string]interface{}) er
 	return database.DB.Model(&model.AgentRun{}).Where("id = ?", runID).Updates(attrs).Error
 }
 
+// ListAgentRunsByIDs returns run metadata for message display.
+func (dao *AgentDAO) ListAgentRunsByIDs(userID uint, runIDs []uint) ([]model.AgentRun, error) {
+	if len(runIDs) == 0 {
+		return []model.AgentRun{}, nil
+	}
+	var runs []model.AgentRun
+	err := database.DB.Where("user_id = ? AND id IN ?", userID, runIDs).
+		Order("id asc").
+		Find(&runs).Error
+	return runs, err
+}
+
 // CreateAgentStep 创建一个 Agent 子步骤记录。
 func (dao *AgentDAO) CreateAgentStep(step *model.AgentStep) error {
 	return database.DB.Create(step).Error

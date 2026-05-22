@@ -78,6 +78,9 @@ export interface AgentRun {
   trigger_message_id: number
   status: string
   intent: string
+  task_type?: string
+  text_model_name?: string
+  image_model_name?: string
   is_optimized?: boolean
   optimized_prompt?: string
   error_message: string

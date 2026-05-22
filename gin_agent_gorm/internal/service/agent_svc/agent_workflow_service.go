@@ -26,6 +26,12 @@ func (svc *AgentService) executeChatTurn(userID uint, conversation model.Convers
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
 	}
+	run.TaskType = "text_chat"
+	run.TextModelName = runtimeTextModelName(config)
+	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+		"task_type":       run.TaskType,
+		"text_model_name": run.TextModelName,
+	})
 
 	messages, err := svc.buildChatMessages(userID, conversation.ID)
 	if err != nil {
@@ -337,13 +343,36 @@ func modelCallTarget(config model.UserModelConfig) string {
 	return strings.TrimRight(config.BaseURL, "/") + "/chat/completions"
 }
 
+func runtimeTextModelName(config model.UserModelConfig) string {
+	if strings.TrimSpace(config.ChatModel) != "" {
+		return strings.TrimSpace(config.ChatModel)
+	}
+	if strings.TrimSpace(config.AnthropicModel) != "" {
+		return strings.TrimSpace(config.AnthropicModel)
+	}
+	return strings.TrimSpace(config.Provider)
+}
+
+func runtimeImageModelName(config model.UserModelConfig) string {
+	if strings.TrimSpace(config.ImageModel) != "" {
+		return strings.TrimSpace(config.ImageModel)
+	}
+	return strings.TrimSpace(config.Provider)
+}
+
 // createClarifyingTurn 生成补充问题轮次。
 func (svc *AgentService) createClarifyingTurn(userID uint, conversation model.Conversation, userMessage model.Message, run model.AgentRun, content string, textModelConfigID uint) (map[string]interface{}, error) {
-	questionResult, err := svc.generateFollowUpQuestions(userID, content, textModelConfigID)
+	questionResult, textModelName, err := svc.generateFollowUpQuestions(userID, content, textModelConfigID)
 	if err != nil {
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
 	}
+	run.TaskType = "image_generation"
+	run.TextModelName = textModelName
+	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+		"task_type":       run.TaskType,
+		"text_model_name": run.TextModelName,
+	})
 	questionTexts := parseQuestionLines(questionResult.Content)
 	_ = svc.createStepWithThinking(
 		run.ID,
@@ -398,10 +427,10 @@ func (svc *AgentService) createClarifyingTurn(userID uint, conversation model.Co
 	}, nil
 }
 
-func (svc *AgentService) generateFollowUpQuestions(userID uint, content string, textModelConfigID uint) (ChatResult, error) {
+func (svc *AgentService) generateFollowUpQuestions(userID uint, content string, textModelConfigID uint) (ChatResult, string, error) {
 	config, err := svc.resolveRuntimeModelConfig(userID, "text", textModelConfigID)
 	if err != nil {
-		return ChatResult{}, err
+		return ChatResult{}, "", err
 	}
 	systemPrompt := strings.Join([]string{
 		"You are the planner agent for an image generation workflow.",
@@ -409,7 +438,7 @@ func (svc *AgentService) generateFollowUpQuestions(userID uint, content string, 
 		"Questions must focus on goal, aspect ratio or size, style, required elements, and avoided elements.",
 		"Return one question per line. Do not add numbering explanations or markdown.",
 	}, " ")
-	return NewProviderWithConfig(config).Chat(ChatRequest{
+	result, err := NewProviderWithConfig(config).Chat(ChatRequest{
 		System: systemPrompt,
 		Messages: []ChatMessage{
 			{Role: "user", Content: content},
@@ -418,6 +447,7 @@ func (svc *AgentService) generateFollowUpQuestions(userID uint, content string, 
 		Stream:          true,
 		ReturnReasoning: true,
 	})
+	return result, runtimeTextModelName(config), err
 }
 
 func parseQuestionLines(content string) []string {
@@ -605,6 +635,12 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
 		return nil, err
 	}
+	run.TaskType = normalizeTaskType(request.TaskType)
+	run.ImageModelName = runtimeImageModelName(config)
+	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+		"task_type":        run.TaskType,
+		"image_model_name": run.ImageModelName,
+	})
 	generationInput, optimizedForGeneration, optimizeReason, err := svc.prepareGenerationPromptInput(userID, userMessage, run, content, request)
 	if err != nil {
 		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": PromptTooLongMessage})

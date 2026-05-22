@@ -145,12 +145,18 @@ func (ctrl *AgentController) ListMessages(c *gin.Context) {
 	if !ok {
 		return
 	}
-	messages, err := agent_svc.NewAgentService().ListMessages(userID, conversationID)
+	svc := agent_svc.NewAgentService()
+	messages, err := svc.ListMessages(userID, conversationID)
 	if err != nil {
 		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "会话不存在")
 		return
 	}
-	responses.New(c).ToResponse(gin.H{"messages": messages})
+	runs, err := svc.ListMessageRuns(userID, messages)
+	if err != nil {
+		responses.New(c).ToErrorResponse(err)
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"messages": messages, "agent_runs": runs})
 }
 
 // SendMessage 发送消息（普通对话或补充问题回答）。

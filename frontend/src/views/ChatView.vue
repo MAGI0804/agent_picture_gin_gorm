@@ -66,7 +66,12 @@
             :key="message?.id || index"
             :class="['message', message?.role, message.input_type]"
           >
-            <small>{{ roleLabel(message.role) }} / {{ inputTypeLabel(message.input_type) }}</small>
+            <div class="message-meta">
+              <span>{{ roleLabel(message.role) }}</span>
+              <span>{{ dialogTypeLabel(message) }}</span>
+              <span>{{ messageModelName(message) }}</span>
+              <span>{{ formatMessageTime(message.created_at) }}</span>
+            </div>
             <p>{{ message.content }}</p>
             <details v-if="message.thinking_content" class="message-thinking-detail">
               <summary>查看思考过程</summary>
@@ -236,6 +241,11 @@
               <span class="message-role">{{ roleLabel(message.role) }}</span>
               <span class="message-index">#{{ index + 1 }}</span>
             </div>
+            <div class="message-mini-meta">
+              <span>{{ dialogTypeLabel(message) }}</span>
+              <span>{{ messageModelName(message) }}</span>
+              <span>{{ formatMessageTime(message.created_at) }}</span>
+            </div>
             <p class="message-content">{{ truncateContent(message.content) }}</p>
             <p v-if="message.thinking_content" class="message-thinking">
               <small>思考：</small>{{ truncateContent(message.thinking_content, 40) }}
@@ -290,6 +300,11 @@ interface SendMessageResponse {
   conversation?: Conversation
 }
 
+interface MessageListResponse {
+  messages: Message[]
+  agent_runs?: AgentRun[]
+}
+
 interface OptimizePromptResponse {
   original_prompt: string
   optimized_prompt: string
@@ -315,6 +330,7 @@ const pendingQuestions = ref<FollowUpQuestion[]>([])
 const artifacts = ref<Artifact[]>([])
 const agentSteps = ref<AgentStep[]>([])
 const activeRunId = ref<number | null>(null)
+const runMetaMap = ref<Record<number, AgentRun>>({})
 const runStatus = ref('就绪')
 const answerText = ref('')
 const normalText = ref('')
@@ -429,7 +445,8 @@ async function refreshWorkspace() {
 
 async function loadMessages() {
   if (!activeConversationId.value) return
-  const data = await apiFetch<{ messages: Message[] }>(`/api/conversations/${activeConversationId.value}/messages`)
+  const data = await apiFetch<MessageListResponse>(`/api/conversations/${activeConversationId.value}/messages`)
+  registerRunMeta(data.agent_runs || [])
   messages.value = await hydrateThinkingMessages(data.messages || [])
   const lastRun = [...messages.value].reverse().find(message => message.agent_run_id)
   activeRunId.value = lastRun?.agent_run_id || null
@@ -697,6 +714,8 @@ async function sendAnswer() {
 
 async function applySendResponse(data: SendMessageResponse) {
   updateConversationTitle(data.conversation)
+  registerRunMeta([data.agent_run])
+  replaceLocalUserMessage(data.user_message)
   pendingQuestions.value = data.follow_up_questions || []
   if (pendingQuestions.value.length) {
     appendProcessStep('等待用户补充回答', formatQuestions(pendingQuestions.value), 'completed')
@@ -718,6 +737,29 @@ async function applySendResponse(data: SendMessageResponse) {
     })
   }
   await loadConversations()
+}
+
+function registerRunMeta(runs: AgentRun[]) {
+  if (!runs.length) return
+  runMetaMap.value = runs.reduce<Record<number, AgentRun>>((acc, run) => {
+    acc[run.id] = run
+    return acc
+  }, { ...runMetaMap.value })
+}
+
+function replaceLocalUserMessage(userMessage?: Message) {
+  if (!userMessage) return
+  const localIndex = [...messages.value]
+    .reverse()
+    .findIndex(message => message.id < 0 && message.role === 'user')
+  if (localIndex >= 0) {
+    const targetIndex = messages.value.length - 1 - localIndex
+    messages.value[targetIndex] = userMessage
+    return
+  }
+  if (!messages.value.some(message => message.id === userMessage.id)) {
+    messages.value.push(userMessage)
+  }
 }
 
 async function saveComposerModelSelection(event: Event) {
@@ -941,6 +983,50 @@ function scrollToMessage(index: number) {
 function truncateContent(content: string, maxLength = 60) {
   if (content.length <= maxLength) return content
   return content.slice(0, maxLength) + '...'
+}
+
+function runMetaForMessage(message: Message) {
+  return message.agent_run_id ? runMetaMap.value[message.agent_run_id] : undefined
+}
+
+function dialogTypeLabel(message: Message) {
+  const run = runMetaForMessage(message)
+  const taskType = run?.task_type || run?.intent || ''
+  if (message.input_type === 'answer_to_questions') return '补充回答'
+  if (message.input_type === 'follow_up_questions') return '智能问答'
+  if (taskType === 'image_generation') return '图片问答'
+  if (taskType === 'html_generation') return 'HTML 问答'
+  if (taskType === 'mixed_generation') return '混合问答'
+  if (taskType === 'text_chat') return '文本问答'
+  return inputTypeLabel(message.input_type)
+}
+
+function messageModelName(message: Message) {
+  const run = runMetaForMessage(message)
+  if (message.input_type === 'follow_up_questions' && run?.text_model_name) {
+    return run.text_model_name
+  }
+  if ((run?.task_type || run?.intent) === 'image_generation' && run?.image_model_name) {
+    return run.image_model_name
+  }
+  if (run?.text_model_name) return run.text_model_name
+  if (run?.image_model_name) return run.image_model_name
+
+  const selection = modelSelection.value
+  if (!selection) return '模型待记录'
+  const options = [...selection.text_models, ...selection.image_models]
+  const modelID = taskType.value === 'image_generation' ? selection.image_model_config_id : selection.text_model_config_id
+  return options.find(item => item.id === modelID)?.model_name || '模型待记录'
+}
+
+function formatMessageTime(timestamp?: number) {
+  if (!timestamp) return '时间待记录'
+  return new Date(timestamp * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
 }
 
 function roleLabel(role: string) {

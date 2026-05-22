@@ -19,6 +19,23 @@ func (svc *AgentService) ListMessages(userID uint, conversationID uint) ([]model
 	return svc.dao.ListMessages(userID, conversationID)
 }
 
+// ListMessageRuns returns run metadata referenced by the visible messages.
+func (svc *AgentService) ListMessageRuns(userID uint, messages []model.Message) ([]model.AgentRun, error) {
+	runIDs := make([]uint, 0, len(messages))
+	seen := map[uint]struct{}{}
+	for _, message := range messages {
+		if message.AgentRunID == 0 {
+			continue
+		}
+		if _, ok := seen[message.AgentRunID]; ok {
+			continue
+		}
+		seen[message.AgentRunID] = struct{}{}
+		runIDs = append(runIDs, message.AgentRunID)
+	}
+	return svc.dao.ListAgentRunsByIDs(userID, runIDs)
+}
+
 // OptimizePrompt 使用 deepseek-v4-pro 对用户输入的提示词进行智能优化。
 func (svc *AgentService) OptimizePrompt(userID uint, request agent_request.OptimizePromptRequest) (map[string]interface{}, error) {
 	content := strings.TrimSpace(request.Content)
@@ -130,12 +147,15 @@ func (svc *AgentService) SendMessage(userID uint, conversationID uint, request a
 		TriggerMessageID: userMessage.ID,
 		Status:           "running",
 		Intent:           svc.detectIntent(content, taskType),
+		TaskType:         taskType,
 		IsOptimized:      isOptimized,
 		OptimizedPrompt:  optimizedPrompt,
 	}
 	if err := svc.dao.CreateAgentRun(&run); err != nil {
 		return nil, err
 	}
+	userMessage.AgentRunID = run.ID
+	_ = svc.dao.UpdateMessageAgentRunID(userMessage.ID, run.ID)
 
 	if inputType == "normal" && taskType == "text_chat" {
 		return svc.executeChatTurn(userID, conversation, userMessage, run, request)
