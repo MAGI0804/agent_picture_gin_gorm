@@ -12,6 +12,8 @@ type SendMessageRequest struct {
 	Content             string `json:"content" form:"content"`
 	TextModelConfigID   uint   `json:"text_model_config_id" form:"text_model_config_id"`
 	ImageModelConfigID  uint   `json:"image_model_config_id" form:"image_model_config_id"`
+	QuestionMode        string `json:"question_mode" form:"question_mode"`
+	OriginalPrompt      string `json:"original_prompt" form:"original_prompt"`
 	IsOptimized         bool   `json:"is_optimized" form:"is_optimized"`
 	OptimizedPrompt     string `json:"optimized_prompt" form:"optimized_prompt"`
 	AnsweredQuestionIDs []uint `json:"answered_question_ids" form:"answered_question_ids"`

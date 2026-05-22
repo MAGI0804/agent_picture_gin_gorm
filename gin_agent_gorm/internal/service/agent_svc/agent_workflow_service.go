@@ -16,6 +16,7 @@ import (
 )
 
 const imagePromptTargetLength = 750
+const imagePromptTargetBytes = 780
 const PromptTooLongMessage = "提示词太长，请重新输入或使用智能优化功能"
 
 // executeChatTurn 执行文本聊天轮次。
@@ -452,37 +453,63 @@ func (svc *AgentService) prepareGenerationPromptInput(
 ) (string, string, string, error) {
 	optimizedPrompt := strings.TrimSpace(request.OptimizedPrompt)
 	if request.IsOptimized && optimizedPrompt != "" {
-		return optimizedPrompt, optimizedPrompt, "用户确认使用智能优化后的提示词。", nil
+		optimizedPrompt = truncatePromptForImageModel(optimizedPrompt)
+		return optimizedPrompt, optimizedPrompt, "用户确认使用智能优化后的提示词；后端已校验图片模型长度限制。", nil
 	}
 
-	if len([]rune(content)) <= imagePromptTargetLength {
+	if promptFitsImageLimits(content) {
 		return content, "", "", nil
 	}
 
-	optimizedPrompt, err := svc.optimizePromptWithDeepseek(userID, content, imagePromptTargetLength, "shorten")
-	if err != nil || strings.TrimSpace(optimizedPrompt) == "" || len([]rune(optimizedPrompt)) > imagePromptTargetLength {
-		logger.Warn("[Prompt Agent] 图片提示词过长且自动优化失败",
+	logger.Warn("[Prompt Agent] 图片提示词过长，自动触发智能优化",
+		zap.Uint("user_id", userID),
+		zap.Uint("message_id", userMessage.ID),
+		zap.Uint("run_id", run.ID),
+		zap.Int("original_length", len([]rune(content))),
+	)
+
+	optimized, err := svc.optimizePromptWithDeepseek(userID, content, imagePromptTargetLength, "shorten")
+	if err != nil {
+		logger.Warn("[Prompt Agent] 自动优化失败，使用长度兜底",
 			zap.Uint("user_id", userID),
 			zap.Uint("message_id", userMessage.ID),
 			zap.Uint("run_id", run.ID),
-			zap.Int("original_length", len([]rune(content))),
 			zap.Error(err),
 		)
-		return "", "", "", errors.New(PromptTooLongMessage)
+		optimized = truncatePromptForImageModel(content)
 	}
 
-	optimizedPrompt = strings.TrimSpace(optimizedPrompt)
-	if updateErr := svc.dao.UpdateMessageOptimization(userMessage.ID, true, optimizedPrompt); updateErr != nil {
-		logger.Warn("[Prompt Agent] 更新消息优化信息失败", zap.Uint("message_id", userMessage.ID), zap.Error(updateErr))
+	optimized = strings.TrimSpace(optimized)
+	if !promptFitsImageLimits(optimized) {
+		secondPass, secondErr := svc.optimizePromptWithDeepseek(
+			userID,
+			optimized,
+			imagePromptTargetLength,
+			"shorten",
+		)
+		if secondErr == nil && strings.TrimSpace(secondPass) != "" {
+			optimized = strings.TrimSpace(secondPass)
+		}
 	}
-	if updateErr := svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
-		"is_optimized":     true,
-		"optimized_prompt": optimizedPrompt,
-	}); updateErr != nil {
-		logger.Warn("[Prompt Agent] 更新任务优化信息失败", zap.Uint("run_id", run.ID), zap.Error(updateErr))
+	optimized = truncatePromptForImageModel(optimized)
+	if optimized == "" {
+		optimized = truncatePromptForImageModel(content)
 	}
 
-	return optimizedPrompt, optimizedPrompt, "图片提示词超过长度限制，已自动调用 deepseek-v4-pro 缩短到约 700 字符。", nil
+	reason := fmt.Sprintf(
+		"图片提示词超过限制，已自动调用 deepseek-v4-pro 优化；最终长度 %d 字符、%d 字节。",
+		len([]rune(optimized)),
+		len(optimized),
+	)
+	_ = svc.createStepWithThinking(
+		run.ID,
+		"auto_prompt_optimize_agent",
+		content,
+		optimized,
+		reason,
+		"",
+	)
+	return optimized, optimized, reason, nil
 }
 
 func (svc *AgentService) ensureImagePromptLength(
@@ -495,37 +522,67 @@ func (svc *AgentService) ensureImagePromptLength(
 	if prompt == "" {
 		return "", errors.New(PromptTooLongMessage)
 	}
-	if len([]rune(prompt)) <= imagePromptTargetLength {
+	if promptFitsImageLimits(prompt) {
 		return prompt, nil
 	}
 
-	optimizedPrompt, err := svc.optimizePromptWithDeepseek(userID, prompt, imagePromptTargetLength, "shorten")
-	if err != nil || strings.TrimSpace(optimizedPrompt) == "" || len([]rune(optimizedPrompt)) > imagePromptTargetLength {
-		logger.Warn("[Prompt Agent] 最终图片提示词过长且缩短失败",
-			zap.Uint("user_id", userID),
-			zap.Uint("message_id", userMessage.ID),
-			zap.Uint("run_id", run.ID),
-			zap.Int("prompt_length", len([]rune(prompt))),
-			zap.Error(err),
-		)
-		return "", errors.New(PromptTooLongMessage)
-	}
+	logger.Warn("[Prompt Agent] 最终图片提示词过长，执行长度兜底",
+		zap.Uint("user_id", userID),
+		zap.Uint("message_id", userMessage.ID),
+		zap.Uint("run_id", run.ID),
+		zap.Int("prompt_length", len([]rune(prompt))),
+		zap.Int("prompt_bytes", len(prompt)),
+	)
+	prompt = truncatePromptForImageModel(prompt)
+	_ = svc.createStepWithThinking(
+		run.ID,
+		"image_prompt_length_check_agent",
+		"",
+		prompt,
+		fmt.Sprintf("最终图片提示词超过限制，已自动压缩到 %d 字符、%d 字节。", len([]rune(prompt)), len(prompt)),
+		"",
+	)
+	return prompt, nil
+}
 
-	optimizedPrompt = strings.TrimSpace(optimizedPrompt)
-	if updateErr := svc.dao.UpdateMessageOptimization(userMessage.ID, true, optimizedPrompt); updateErr != nil {
-		logger.Warn("[Prompt Agent] 更新最终消息优化信息失败", zap.Uint("message_id", userMessage.ID), zap.Error(updateErr))
+func promptFitsImageLimits(prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
+	return len([]rune(prompt)) <= imagePromptTargetLength && len(prompt) <= imagePromptTargetBytes
+}
+
+func truncatePromptForImageModel(prompt string) string {
+	prompt = truncatePromptRunes(prompt, imagePromptTargetLength)
+	return truncatePromptBytes(prompt, imagePromptTargetBytes)
+}
+
+func truncatePromptRunes(prompt string, limit int) string {
+	prompt = strings.TrimSpace(prompt)
+	if limit <= 0 {
+		return prompt
 	}
-	if updateErr := svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
-		"is_optimized":     true,
-		"optimized_prompt": optimizedPrompt,
-	}); updateErr != nil {
-		logger.Warn("[Prompt Agent] 更新最终任务优化信息失败", zap.Uint("run_id", run.ID), zap.Error(updateErr))
+	runes := []rune(prompt)
+	if len(runes) <= limit {
+		return prompt
 	}
-	userMessage.IsOptimized = true
-	userMessage.OptimizedPrompt = optimizedPrompt
-	run.IsOptimized = true
-	run.OptimizedPrompt = optimizedPrompt
-	return optimizedPrompt, nil
+	return strings.TrimSpace(string(runes[:limit]))
+}
+
+func truncatePromptBytes(prompt string, limit int) string {
+	prompt = strings.TrimSpace(prompt)
+	if limit <= 0 || len(prompt) <= limit {
+		return prompt
+	}
+	var used int
+	var builder strings.Builder
+	for _, r := range prompt {
+		part := string(r)
+		if used+len(part) > limit {
+			break
+		}
+		builder.WriteString(part)
+		used += len(part)
+	}
+	return strings.TrimSpace(builder.String())
 }
 
 func normalizePromptTargetLength(targetLength int) int {
@@ -559,6 +616,11 @@ func (svc *AgentService) executeGeneration(userID uint, conversation model.Conve
 		userMessage.OptimizedPrompt = optimizedForGeneration
 		run.IsOptimized = true
 		run.OptimizedPrompt = optimizedForGeneration
+		_ = svc.dao.UpdateMessageOptimization(userMessage.ID, true, optimizedForGeneration)
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+			"is_optimized":     true,
+			"optimized_prompt": optimizedForGeneration,
+		})
 	}
 	memories, _ := svc.dao.ListContextMemories(userID, conversation.ID, 5)
 	questions, _ := svc.dao.ListConversationQuestions(userID, conversation.ID, 20)
@@ -788,13 +850,13 @@ func (svc *AgentService) refineGenerationPrompt(
 		)
 		return ChatResult{}, errors.New(PromptTooLongMessage)
 	}
-	
+
 	// 直接使用原始提示词，不做自动优化
 	logger.Info("[Prompt Agent] 使用原始提示词",
 		zap.String("raw_prompt", rawPrompt),
 		zap.Int("raw_length", rawLength),
 	)
-	
+
 	return ChatResult{
 		Content:          rawPrompt,
 		ReasoningContent: "直接使用用户输入的提示词",

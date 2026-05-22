@@ -26,13 +26,13 @@ func (svc *AgentService) OptimizePrompt(userID uint, request agent_request.Optim
 		return nil, errors.New("content cannot be empty")
 	}
 	targetLength := normalizePromptTargetLength(request.TargetLength)
-	
+
 	logger.Info("[OptimizePrompt] 开始优化提示词",
 		zap.Uint("user_id", userID),
 		zap.Int("original_length", len([]rune(content))),
 		zap.Int("target_length", targetLength),
 	)
-	
+
 	// 决定优化类型
 	optimizationType := "enhance"
 	if len([]rune(content)) > targetLength {
@@ -45,33 +45,37 @@ func (svc *AgentService) OptimizePrompt(userID uint, request agent_request.Optim
 			zap.String("optimization_type", optimizationType),
 		)
 	}
-	
+
 	optimizedPrompt, err := svc.optimizePromptWithDeepseek(userID, content, targetLength, optimizationType)
 	if err != nil {
 		logger.Error("[OptimizePrompt] deepseek-v4-pro 优化失败", zap.Error(err))
 		return nil, errors.Wrap(err, "智能优化失败，请重试")
 	}
-	
+
 	optimizedPrompt = strings.TrimSpace(optimizedPrompt)
 	if optimizedPrompt == "" {
 		logger.Error("[OptimizePrompt] 优化结果为空")
 		return nil, errors.New("优化结果为空，请重试")
 	}
-	
+	if len([]rune(optimizedPrompt)) > targetLength {
+		optimizedPrompt = truncatePromptRunes(optimizedPrompt, targetLength)
+	}
+	optimizedPrompt = truncatePromptBytes(optimizedPrompt, imagePromptTargetBytes)
+
 	finalLength := len([]rune(optimizedPrompt))
 	logger.Info("[OptimizePrompt] 优化完成",
 		zap.Int("original_length", len([]rune(content))),
 		zap.Int("optimized_length", finalLength),
 		zap.String("optimized_prompt", optimizedPrompt),
 	)
-	
+
 	if finalLength > targetLength+100 {
 		logger.Warn("[OptimizePrompt] 优化结果仍较长，但继续使用",
 			zap.Int("length", finalLength),
 			zap.Int("target_length", targetLength),
 		)
 	}
-	
+
 	return map[string]interface{}{
 		"original_prompt":  content,
 		"optimized_prompt": optimizedPrompt,
@@ -137,6 +141,16 @@ func (svc *AgentService) SendMessage(userID uint, conversationID uint, request a
 		return svc.executeChatTurn(userID, conversation, userMessage, run, request)
 	}
 	if inputType == "normal" && taskType == "image_generation" {
+		if isSmartQuestionMode(request.QuestionMode) {
+			return svc.createClarifyingTurn(
+				userID,
+				conversation,
+				userMessage,
+				run,
+				content,
+				request.TextModelConfigID,
+			)
+		}
 		return svc.executeGeneration(userID, conversation, userMessage, run, content, request)
 	}
 	if inputType == "normal" {
@@ -147,6 +161,15 @@ func (svc *AgentService) SendMessage(userID uint, conversationID uint, request a
 		return nil, err
 	}
 	return svc.executeGeneration(userID, conversation, userMessage, run, content, request)
+}
+
+func isSmartQuestionMode(questionMode string) bool {
+	switch strings.ToLower(strings.TrimSpace(questionMode)) {
+	case "smart_qa", "smart_question", "clarify":
+		return true
+	default:
+		return false
+	}
 }
 
 func makeConversationTitle(content string) string {

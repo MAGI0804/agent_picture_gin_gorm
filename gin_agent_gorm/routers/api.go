@@ -2,9 +2,11 @@ package routers
 
 import (
 	"net/http"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 
+	"gin-biz-web-api/global"
 	"gin-biz-web-api/internal/middleware"
 	"gin-biz-web-api/pkg/config"
 )
@@ -30,5 +32,12 @@ func RegisterAPIRoutes(r *gin.Engine) {
 // upload 路径兼容脚手架原有上传能力，artifacts 路径用于 AI Agent 生成产物预览。
 func setStaticURL(r *gin.Engine) {
 	r.StaticFS(config.GetString("cfg.upload.static_fs_relative_path"), http.Dir(config.GetString("cfg.upload.save_path")))
-	r.StaticFS(config.GetString("cfg.ai_agent.storage.public_path", "/artifacts"), http.Dir(config.GetString("cfg.ai_agent.storage.local_path", "public/artifacts")))
+	r.StaticFS(config.GetString("cfg.ai_agent.storage.public_path", "/artifacts"), http.Dir(resolveLocalPath(config.GetString("cfg.ai_agent.storage.local_path", "public/artifacts"))))
+}
+
+func resolveLocalPath(localPath string) string {
+	if filepath.IsAbs(localPath) {
+		return localPath
+	}
+	return filepath.Join(global.RootPath, localPath)
 }

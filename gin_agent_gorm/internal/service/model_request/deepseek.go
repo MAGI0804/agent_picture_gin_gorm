@@ -318,26 +318,23 @@ func OptimizePromptWithDeepseek(url, apiKey, originalPrompt string, targetLength
 	if optimizationType == "shorten" {
 		// 缩短模式：在保持关键元素的情况下缩短提示词
 		systemPrompt = strings.Join([]string{
-			"You are an expert prompt engineer specialized in optimizing image generation prompts.",
-			"Your task: shorten the given prompt while preserving ALL critical visual information.",
-			fmt.Sprintf("CRITICAL: Try your best to make the prompt under %d characters long.", targetLength),
-			"Keep ALL key elements: subject, composition, style, colors, lighting, text placements, dimensions, etc.",
-			"Make it concise but keep full visual meaning.",
-			"Return ONLY the optimized prompt, no explanations.",
+			"你是图片生成提示词优化专家。",
+			"请压缩并优化用户提示词，保留主体、构图、风格、颜色、光线、文字位置、尺寸和限制条件。",
+			fmt.Sprintf("优化后的提示词必须不超过 %d 个字符。", targetLength),
+			"只返回优化后的提示词，不要解释，不要使用 Markdown。",
 		}, " ")
-		userPrompt = fmt.Sprintf("Please shorten this image generation prompt while keeping ALL important details. Try to make it under %d characters:\n\n%s",
+		userPrompt = fmt.Sprintf("请将下面的提示词进行优化，优化后的提示词显示出来，并控制在 %d 个字符以内：\n\n%s",
 			targetLength, originalPrompt)
 	} else {
 		// 增强模式：优化和增强提示词
 		systemPrompt = strings.Join([]string{
-			"You are an expert prompt engineer specialized in optimizing image generation prompts.",
-			"Your task: enhance and optimize the given prompt for better image generation results.",
-			fmt.Sprintf("CRITICAL: Try your best to make the prompt under %d characters long.", targetLength),
-			"Improve clarity, add useful artistic/style details where appropriate, but keep the core intent.",
-			"Return ONLY the optimized prompt, no explanations.",
+			"你是提示词优化专家。",
+			"请优化用户提示词，使表达更清晰、更适合模型理解，保留原始意图和关键约束。",
+			fmt.Sprintf("优化后的提示词尽量不超过 %d 个字符。", targetLength),
+			"只返回优化后的提示词，不要解释，不要使用 Markdown。",
 		}, " ")
-		userPrompt = fmt.Sprintf("Please optimize and enhance this image generation prompt. Try to make it under %d characters:\n\n%s",
-			targetLength, originalPrompt)
+		userPrompt = fmt.Sprintf("请将下面的提示词进行优化，优化后的提示词显示出来：\n\n%s\n\n字符上限：%d",
+			originalPrompt, targetLength)
 	}
 
 	request := DeepseekChatRequest{

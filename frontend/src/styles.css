@@ -619,6 +619,54 @@ label {
   padding: 16px;
 }
 
+.process-timeline {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px 14px;
+}
+
+.process-timeline strong {
+  font-size: 13px;
+}
+
+.process-timeline ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.process-timeline li {
+  line-height: 1.4;
+}
+
+.process-timeline li.running span {
+  color: #2563eb;
+}
+
+.process-timeline li.failed span {
+  color: #b91c1c;
+}
+
+.process-timeline span {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f766e;
+}
+
+.process-timeline p {
+  max-height: 120px;
+  overflow: auto;
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #475569;
+  font-size: 12px;
+}
+
 .generating-status {
   display: flex;
   flex-direction: column;

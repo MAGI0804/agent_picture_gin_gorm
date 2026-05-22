@@ -117,6 +117,9 @@
                 <button class="secondary-action" :disabled="!canOptimizePrompt" @click="optimizeNormalPrompt">
                   {{ optimizingPrompt ? '优化中...' : '智能优化' }}
                 </button>
+                <button class="secondary-action" :disabled="!canStartSmartQa" @click="startSmartQa">
+                  智能问答
+                </button>
               </div>
               <div v-if="optimizedPromptText || optimizationError || optimizingPrompt" class="optimization-panel">
                 <div class="optimization-header">
@@ -156,7 +159,17 @@
         </div>
 
         <section v-if="rightTab === 'artifacts'" class="artifact-list">
-          <p v-if="!artifacts.length" class="muted">暂无产物。发起图片或 HTML 生成后会显示在这里。</p>
+          <div v-if="processTimeline.length" class="process-timeline">
+            <strong>本轮过程</strong>
+            <ol>
+              <li v-for="item in processTimeline" :key="item.id" :class="item.status">
+                <span>{{ item.title }}</span>
+                <p v-if="item.detail">{{ item.detail }}</p>
+              </li>
+            </ol>
+          </div>
+
+          <p v-if="!artifacts.length && !processTimeline.length" class="muted">暂无产物。发起图片或 HTML 生成后会显示在这里。</p>
           
           <!-- 图片生成中/等待状态显示 -->
           <div v-if="sendingNormal || sendingAnswer" class="generating-status">
@@ -281,8 +294,19 @@ interface OptimizePromptResponse {
   original_prompt: string
   optimized_prompt: string
   target_length: number
+  original_length?: number
+  optimized_length?: number
 }
 
+interface ProcessTimelineItem {
+  id: number
+  title: string
+  detail: string
+  status: 'running' | 'completed' | 'failed'
+}
+
+const IMAGE_PROMPT_LIMIT = 750
+const IMAGE_PROMPT_BYTE_LIMIT = 780
 const router = useRouter()
 const conversations = ref<Conversation[]>([])
 const activeConversationId = ref<number | null>(null)
@@ -307,6 +331,9 @@ const thinkingExpanded = ref(false)
 const activeMessageIndex = ref<number | null>(null)
 const rightTab = ref<RightTab>('artifacts')
 const modelSelection = ref<ModelSelection | null>(null)
+const processTimeline = ref<ProcessTimelineItem[]>([])
+const smartQaOriginalPrompt = ref('')
+const smartQaActive = ref(false)
 
 const activeTitle = computed(() => {
   return conversations.value.find(item => item.id === activeConversationId.value)?.title || '新的图片 Agent 会话'
@@ -320,6 +347,9 @@ const modelSummary = computed(() => {
 })
 const canSendNormal = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value)
 const canOptimizePrompt = computed(() => Boolean(normalText.value.trim()) && !sendingNormal.value && !optimizingPrompt.value)
+const canStartSmartQa = computed(() => {
+  return Boolean(normalText.value.trim()) && !sendingNormal.value && !optimizingPrompt.value
+})
 const canSendAnswer = computed(() => {
   return Boolean(activeConversationId.value && answerText.value.trim() && pendingQuestions.value.length) && !sendingAnswer.value
 })
@@ -387,6 +417,9 @@ async function openConversation(id: number) {
   activeConversationId.value = id
   pendingQuestions.value = []
   agentSteps.value = []
+  smartQaOriginalPrompt.value = ''
+  smartQaActive.value = false
+  processTimeline.value = []
   await refreshWorkspace()
 }
 
@@ -415,27 +448,31 @@ async function sendNormal(useOptimizedPrompt = false) {
   const originalContent = normalText.value.trim()
   const optimizedContent = optimizedPromptText.value.trim()
   const isUsingOptimized = Boolean(useOptimizedPrompt && optimizedContent)
-  const content = isUsingOptimized ? optimizedContent : originalContent
-  if (sendingNormal.value || !content) return
+  const selectedContent = isUsingOptimized ? optimizedContent : originalContent
+  if (sendingNormal.value || !selectedContent) return
   normalText.value = ''
   clearPromptOptimization()
+  resetSmartQaState()
+  resetProcessTimeline()
   sendingNormal.value = true
   try {
     const conversationId = await ensureConversation()
     if (!conversationId) return
-    messages.value.push(createLocalMessage(conversationId, 'normal', content))
+    const promptPayload = await preparePromptForTask(selectedContent, isUsingOptimized)
+    messages.value.push(createLocalMessage(conversationId, 'normal', promptPayload.content))
     showLocalThinking('frontend_dispatch', '已提交请求，等待 Agent 规划下一步。')
+    appendProcessStep('已提交用户输入', promptPayload.content, 'completed')
 
     const data = await apiFetch<SendMessageResponse>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify({
         input_type: 'normal',
         task_type: taskType.value,
-        content,
+        content: promptPayload.content,
         text_model_config_id: selectedTextModelId.value,
         image_model_config_id: taskType.value === 'image_generation' ? selectedImageModelId.value : 0,
-        is_optimized: isUsingOptimized,
-        optimized_prompt: isUsingOptimized ? optimizedContent : '',
+        is_optimized: promptPayload.isOptimized,
+        optimized_prompt: promptPayload.optimizedPrompt,
         stream: true,
         return_reasoning: true
       })
@@ -452,6 +489,9 @@ async function optimizeNormalPrompt() {
   if (optimizingPrompt.value || !normalText.value.trim()) return
   optimizationError.value = ''
   optimizedPromptText.value = ''
+  resetProcessTimeline()
+  appendProcessStep('准备智能优化', `原始提示词：${normalText.value.trim()}`, 'completed')
+  appendProcessStep('正在调用 deepseek-v4-pro', '请将下面的提示词进行优化，优化后的提示词显示出来。', 'running')
   optimizingPrompt.value = true
   try {
     const data = await apiFetch<OptimizePromptResponse>('/api/prompts/optimize', {
@@ -462,10 +502,62 @@ async function optimizeNormalPrompt() {
       })
     })
     optimizedPromptText.value = data.optimized_prompt || ''
+    completeLastRunningProcessStep(
+      'deepseek-v4-pro 优化完成',
+      `原始 ${data.original_length ?? data.original_prompt.length} 字，优化后 ${data.optimized_length ?? optimizedPromptText.value.length} 字。`
+    )
+    appendProcessStep('优化后的提示词', optimizedPromptText.value, 'completed')
   } catch (error) {
     optimizationError.value = error instanceof Error ? error.message : '提示词太长，请重新输入'
+    completeLastRunningProcessStep('智能优化失败', optimizationError.value, 'failed')
   } finally {
     optimizingPrompt.value = false
+  }
+}
+
+async function startSmartQa() {
+  const content = normalText.value.trim()
+  if (sendingNormal.value || !content) return
+  taskType.value = 'image_generation'
+  normalText.value = ''
+  clearPromptOptimization()
+  resetProcessTimeline()
+  resetSmartQaState()
+  smartQaOriginalPrompt.value = content
+  smartQaActive.value = true
+  sendingNormal.value = true
+  try {
+    const conversationId = await ensureConversation()
+    if (!conversationId) return
+    messages.value.push(createLocalMessage(conversationId, 'normal', content))
+    appendProcessStep('进入智能问答', `原始需求：${content}`, 'completed')
+    appendProcessStep('正在生成针对性问题', '调用 deepseek-v4-pro 输出图片生成前需要确认的问题。', 'running')
+    showLocalThinking('smart_question_agent', '正在根据用户需求生成针对性问题。')
+
+    const data = await apiFetch<SendMessageResponse>(`/api/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        input_type: 'normal',
+        task_type: 'image_generation',
+        content,
+        question_mode: 'smart_qa',
+        text_model_config_id: selectedTextModelId.value,
+        image_model_config_id: selectedImageModelId.value,
+        stream: true,
+        return_reasoning: true
+      })
+    })
+    completeLastRunningProcessStep('针对性问题已生成', formatQuestions(data.follow_up_questions || []))
+    await applySendResponse(data)
+  } catch (error) {
+    completeLastRunningProcessStep(
+      '智能问答失败',
+      error instanceof Error ? error.message : '请求失败',
+      'failed'
+    )
+    appendErrorMessage(error)
+  } finally {
+    sendingNormal.value = false
   }
 }
 
@@ -474,31 +566,127 @@ function clearPromptOptimization() {
   optimizationError.value = ''
 }
 
+async function preparePromptForTask(content: string, isAlreadyOptimized: boolean) {
+  if (taskType.value !== 'image_generation') {
+    return {
+      content,
+      isOptimized: isAlreadyOptimized,
+      optimizedPrompt: isAlreadyOptimized ? content : ''
+    }
+  }
+  return prepareImagePromptForSend(content, isAlreadyOptimized)
+}
+
+async function prepareImagePromptForSend(content: string, isAlreadyOptimized: boolean) {
+  if (fitsImagePromptLimits(content)) {
+    return {
+      content,
+      isOptimized: isAlreadyOptimized,
+      optimizedPrompt: isAlreadyOptimized ? content : ''
+    }
+  }
+
+  appendProcessStep(
+    '检测到图片提示词超过模型限制',
+    `当前 ${content.length} 字、${promptByteLength(content)} 字节，自动调用 deepseek-v4-pro 优化。`,
+    'completed'
+  )
+  appendProcessStep('正在自动优化图片提示词', '不需要用户确认，优化完成后会直接提交图片模型。', 'running')
+
+  let optimizedPrompt = ''
+  try {
+    const data = await apiFetch<OptimizePromptResponse>('/api/prompts/optimize', {
+      method: 'POST',
+      body: JSON.stringify({
+        content,
+        target_length: IMAGE_PROMPT_LIMIT
+      })
+    })
+    optimizedPrompt = data.optimized_prompt || ''
+    completeLastRunningProcessStep(
+      '自动优化完成',
+      `原始 ${data.original_length ?? content.length} 字，优化后 ${data.optimized_length ?? optimizedPrompt.length} 字、${promptByteLength(optimizedPrompt)} 字节。`
+    )
+  } catch (error) {
+    optimizedPrompt = truncatePromptForImage(content)
+    completeLastRunningProcessStep(
+      '自动优化降级处理',
+      error instanceof Error ? `${error.message}；已使用 750 字符兜底内容继续。` : '已使用 750 字符兜底内容继续。',
+      'completed'
+    )
+  }
+
+  if (!fitsImagePromptLimits(optimizedPrompt)) {
+    optimizedPrompt = truncatePromptForImage(optimizedPrompt)
+    appendProcessStep(
+      '优化结果长度兜底',
+      `已压缩到 ${optimizedPrompt.length} 字、${promptByteLength(optimizedPrompt)} 字节。`,
+      'completed'
+    )
+  }
+
+  appendProcessStep('最终发送给图片模型的提示词', optimizedPrompt, 'completed')
+  return {
+    content: optimizedPrompt,
+    isOptimized: true,
+    optimizedPrompt
+  }
+}
+
+function fitsImagePromptLimits(content: string) {
+  return content.length <= IMAGE_PROMPT_LIMIT && promptByteLength(content) <= IMAGE_PROMPT_BYTE_LIMIT
+}
+
+function promptByteLength(content: string) {
+  return new TextEncoder().encode(content).length
+}
+
+function truncatePromptForImage(content: string) {
+  let result = ''
+  for (const char of content) {
+    const next = result + char
+    if (next.length > IMAGE_PROMPT_LIMIT || promptByteLength(next) > IMAGE_PROMPT_BYTE_LIMIT) {
+      break
+    }
+    result = next
+  }
+  return result.trim()
+}
+
 async function sendAnswer() {
   if (sendingAnswer.value || !activeConversationId.value || !answerText.value.trim()) return
   const conversationId = activeConversationId.value
-  const content = answerText.value.trim()
-  const answeredQuestionIds = pendingQuestions.value.map(question => question.id)
+  const rawAnswer = answerText.value.trim()
+  const questionsSnapshot = [...pendingQuestions.value]
+  const answeredQuestionIds = questionsSnapshot.map(question => question.id)
+  const mergedContent = buildQuestionAnswerPrompt(smartQaOriginalPrompt.value, questionsSnapshot, rawAnswer)
   answerText.value = ''
   sendingAnswer.value = true
   try {
-    messages.value.push(createLocalMessage(conversationId, 'answer_to_questions', content))
+    appendProcessStep('已收到补充回答', rawAnswer, 'completed')
+    const promptPayload = await prepareImagePromptForSend(mergedContent, false)
+    messages.value.push(createLocalMessage(conversationId, 'answer_to_questions', rawAnswer))
     showLocalThinking('frontend_dispatch', '已提交补充回答，继续执行生成流程。')
+    appendProcessStep('已提交图片模型', promptPayload.content, 'completed')
 
     const data = await apiFetch<SendMessageResponse>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify({
         input_type: 'answer_to_questions',
         task_type: 'image_generation',
-        content,
+        content: promptPayload.content,
         text_model_config_id: selectedTextModelId.value,
         image_model_config_id: selectedImageModelId.value,
+        original_prompt: smartQaOriginalPrompt.value,
         answered_question_ids: answeredQuestionIds,
+        is_optimized: promptPayload.isOptimized,
+        optimized_prompt: promptPayload.optimizedPrompt,
         stream: true,
         return_reasoning: true
       })
     })
     pendingQuestions.value = []
+    resetSmartQaState()
     await applySendResponse(data)
   } catch (error) {
     appendErrorMessage(error)
@@ -510,9 +698,15 @@ async function sendAnswer() {
 async function applySendResponse(data: SendMessageResponse) {
   updateConversationTitle(data.conversation)
   pendingQuestions.value = data.follow_up_questions || []
+  if (pendingQuestions.value.length) {
+    appendProcessStep('等待用户补充回答', formatQuestions(pendingQuestions.value), 'completed')
+  }
   if (data.artifacts) {
     artifacts.value = data.artifacts
-    if (data.artifacts.length) rightTab.value = 'artifacts'
+    if (data.artifacts.length) {
+      rightTab.value = 'artifacts'
+      appendProcessStep('图片已生成，右侧显示', `共 ${data.artifacts.length} 个产物。`, 'completed')
+    }
   }
   activeRunId.value = data.agent_run.id
   runStatus.value = statusLabel(data.agent_run.status)
@@ -585,6 +779,66 @@ function collectThinkingContent(steps: AgentStep[]) {
       return parts
     })
     .join('\n\n')
+}
+
+function appendProcessStep(title: string, detail = '', status: ProcessTimelineItem['status'] = 'completed') {
+  rightTab.value = 'artifacts'
+  processTimeline.value.push({
+    id: Date.now() + processTimeline.value.length,
+    title,
+    detail,
+    status
+  })
+}
+
+function completeLastRunningProcessStep(
+  title: string,
+  detail = '',
+  status: ProcessTimelineItem['status'] = 'completed'
+) {
+  const index = [...processTimeline.value].reverse().findIndex(item => item.status === 'running')
+  if (index === -1) {
+    appendProcessStep(title, detail, status)
+    return
+  }
+  const targetIndex = processTimeline.value.length - 1 - index
+  processTimeline.value[targetIndex] = {
+    ...processTimeline.value[targetIndex],
+    title,
+    detail,
+    status
+  }
+}
+
+function resetProcessTimeline() {
+  processTimeline.value = []
+}
+
+function resetSmartQaState() {
+  smartQaOriginalPrompt.value = ''
+  smartQaActive.value = false
+}
+
+function formatQuestions(questions: FollowUpQuestion[]) {
+  if (!questions.length) return '未生成新的补充问题。'
+  return questions.map((question, index) => `${index + 1}. ${question.question}`).join('\n')
+}
+
+function buildQuestionAnswerPrompt(
+  originalPrompt: string,
+  questions: FollowUpQuestion[],
+  answer: string
+) {
+  const sourcePrompt = originalPrompt.trim()
+  if (!sourcePrompt || !questions.length) return answer
+
+  return [
+    '原始需求：',
+    sourcePrompt,
+    '',
+    '补充问题与回答：',
+    ...questions.map((question, index) => `${index + 1}. ${question.question}\n回答：${answer}`)
+  ].join('\n')
 }
 
 function createLocalMessage(conversationId: number, inputType: string, content: string): Message {

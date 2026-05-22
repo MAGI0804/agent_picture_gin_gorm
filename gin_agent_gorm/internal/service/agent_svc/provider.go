@@ -828,25 +828,10 @@ func truncateForJimengPrompt(prompt string) string {
 	// 先去除 markdown 格式
 	cleaned := strings.TrimSpace(prompt)
 
-	// 如果是中文，尝试提取纯英文提示词（因为中文可能占用更多字符）
-	// 或者直接截断
-	runes := []rune(cleaned)
-
-	// 更激进的截断，确保不超过 750 字符（留出一些余地）
-	maxLength := 750
-	if len(runes) <= maxLength {
-		return string(runes)
+	if promptFitsImageLimits(cleaned) {
+		return cleaned
 	}
-
-	// 尝试在标点符号处截断，避免截断单词
-	for i := maxLength; i > maxLength-100 && i > 0; i-- {
-		if strings.ContainsRune(".,!?，。！？", runes[i]) {
-			return string(runes[:i+1])
-		}
-	}
-
-	// 如果找不到合适的位置，直接截断
-	return string(runes[:maxLength])
+	return truncatePromptForImageModel(cleaned)
 }
 
 func (provider *HTTPProvider) parseOpenAIImageFile(body []byte, prompt string) (GeneratedFile, error) {
