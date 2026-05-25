@@ -13,7 +13,13 @@ func setupAIAgent() {
 		return
 	}
 
-	err := database.DB.AutoMigrate(
+	err := database.DB.AutoMigrate(aiAgentAutoMigrateModels()...)
+	logger.LogErrorIf(err)
+	ensureAIAgentIndexes()
+}
+
+func aiAgentAutoMigrateModels() []interface{} {
+	return []interface{}{
 		&model.User{},
 		&model.Conversation{},
 		&model.Message{},
@@ -24,14 +30,15 @@ func setupAIAgent() {
 		&model.Artifact{},
 		&model.ArtifactVersion{},
 		&model.ArtifactFeedback{},
+		&model.TaskLedgerItem{},
+		&model.ToolInvocation{},
+		&model.MemoryEvent{},
 		&model.AgentPromptVersion{},
 		&model.AgentReflection{},
 		&model.ModelConfig{},
 		&model.UserModelConfig{},
 		&model.UserModelPermission{},
-	)
-	logger.LogErrorIf(err)
-	ensureAIAgentIndexes()
+	}
 }
 
 func ensureAIAgentIndexes() {

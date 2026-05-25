@@ -47,7 +47,13 @@ func (executor *Executor) Execute(
 		return state, err
 	}
 
-	for _, node := range flow.Nodes {
+	nodes, err := flow.OrderedNodes()
+	if err != nil {
+		_ = executor.failRun(state.RunID, err)
+		return state, err
+	}
+
+	for _, node := range nodes {
 		start := time.Now()
 
 		// 第二步：执行节点前保存输入快照和 input hash，后续用于重试和审计。

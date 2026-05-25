@@ -23,6 +23,7 @@ type AgentStep struct {
 	OutputJSON       string `gorm:"column:output_json;type:text" json:"output_json"`
 	InputHash        string `gorm:"column:input_hash;size:128" json:"input_hash"`
 	OutputHash       string `gorm:"column:output_hash;size:128" json:"output_hash"`
+	ErrorCode        string `gorm:"column:error_code;size:128" json:"error_code"`
 	CommonTimestampsField
 }
 

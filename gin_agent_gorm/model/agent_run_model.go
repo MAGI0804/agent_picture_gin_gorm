@@ -15,6 +15,8 @@ type AgentRun struct {
 	WorkflowVersion  string `gorm:"column:workflow_version;size:64" json:"workflow_version"`
 	StateJSON        string `gorm:"column:state_json;type:text" json:"state_json"`
 	BudgetJSON       string `gorm:"column:budget_json;type:text" json:"budget_json"`
+	IdempotencyKey   string `gorm:"column:idempotency_key;size:128;index" json:"idempotency_key"`
+	LockKey          string `gorm:"column:lock_key;size:128;index" json:"lock_key"`
 	TextModelName    string `gorm:"column:text_model_name;size:128" json:"text_model_name"`
 	ImageModelName   string `gorm:"column:image_model_name;size:128" json:"image_model_name"`
 	IsOptimized      bool   `gorm:"column:is_optimized;not null;default:false" json:"is_optimized"`
