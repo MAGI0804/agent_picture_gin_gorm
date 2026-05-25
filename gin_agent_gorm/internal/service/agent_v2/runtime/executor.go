@@ -14,25 +14,30 @@ import (
 	"gin-biz-web-api/model"
 )
 
-// Repository 数据访问接口，定义执行器需要的数据库操作
+// Repository 定义执行器需要的数据写入能力，便于后续替换 DAO 或做单元测试。
 type Repository interface {
 	CreateStep(step *model.AgentStep) error
 	UpdateStep(stepID uint, attrs map[string]interface{}) error
 	UpdateRun(runID uint, attrs map[string]interface{}) error
 }
 
-// Executor 工作流执行器，负责按顺序执行工作流中的所有节点
+// Executor 负责推进 workflow：创建 step、执行节点、保存状态、处理失败。
 type Executor struct {
 	repo Repository
 }
 
-// NewExecutor 创建 Executor 实例
+// NewExecutor 创建 workflow 执行器。
 func NewExecutor(repo Repository) *Executor {
 	return &Executor{repo: repo}
 }
 
-// Execute 执行工作流，按顺序运行所有节点
-func (executor *Executor) Execute(ctx context.Context, state domain.RunState, flow workflow.Workflow) (domain.RunState, error) {
+// Execute 按 workflow 定义的顺序执行所有节点，并把每一步写入 agent_steps。
+func (executor *Executor) Execute(
+	ctx context.Context,
+	state domain.RunState,
+	flow workflow.Workflow,
+) (domain.RunState, error) {
+	// 第一步：标记 run 开始执行，并记录 workflow 名称和版本。
 	if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 		"status":           domain.RunStatusRunning,
 		"workflow_name":    flow.Name,
@@ -44,6 +49,8 @@ func (executor *Executor) Execute(ctx context.Context, state domain.RunState, fl
 
 	for _, node := range flow.Nodes {
 		start := time.Now()
+
+		// 第二步：执行节点前保存输入快照和 input hash，后续用于重试和审计。
 		inputJSON := mustJSON(state)
 		step := model.AgentStep{
 			AgentRunID: state.RunID,
@@ -60,6 +67,7 @@ func (executor *Executor) Execute(ctx context.Context, state domain.RunState, fl
 			return state, err
 		}
 
+		// 第三步：调用具体 Agent 节点。当前是 mock 节点，后续替换真实 Agent。
 		result, err := node.Run(ctx, state)
 		durationMS := time.Since(start).Milliseconds()
 		if err != nil {
@@ -72,6 +80,7 @@ func (executor *Executor) Execute(ctx context.Context, state domain.RunState, fl
 			return state, err
 		}
 
+		// 第四步：保存节点输出、输出 hash 和耗时，形成可观察 timeline。
 		if result.Status == "" {
 			result.Status = domain.StepStatusCompleted
 		}
@@ -87,6 +96,7 @@ func (executor *Executor) Execute(ctx context.Context, state domain.RunState, fl
 			return state, err
 		}
 
+		// 第五步：把节点结果合并进 RunState，并保存最新 state_json。
 		state = applyStepResult(state, node.Key(), result)
 		if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 			"state_json": mustJSON(state),
@@ -98,6 +108,7 @@ func (executor *Executor) Execute(ctx context.Context, state domain.RunState, fl
 		}
 	}
 
+	// 第六步：所有节点完成后标记 run 完成。
 	if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 		"status":       domain.RunStatusCompleted,
 		"completed_at": int(time.Now().Unix()),
@@ -108,7 +119,7 @@ func (executor *Executor) Execute(ctx context.Context, state domain.RunState, fl
 	return state, nil
 }
 
-// failRun 将运行标记为失败
+// failRun 将 run 标记为失败，并保存错误摘要。
 func (executor *Executor) failRun(runID uint, err error) error {
 	if err == nil {
 		err = errors.New("agent v2 run failed")
@@ -119,7 +130,7 @@ func (executor *Executor) failRun(runID uint, err error) error {
 	})
 }
 
-// applyStepResult 将步骤结果应用到运行状态
+// applyStepResult 把节点输出合并到共享 RunState。
 func applyStepResult(state domain.RunState, key string, result domain.StepResult) domain.RunState {
 	if state.Metadata == nil {
 		state.Metadata = map[string]string{}
@@ -144,7 +155,7 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 	return state
 }
 
-// mustJSON 将对象序列化为 JSON，出错时返回空对象
+// mustJSON 将对象序列化为 JSON，序列化失败时返回空对象字符串。
 func mustJSON(value interface{}) string {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -153,7 +164,7 @@ func mustJSON(value interface{}) string {
 	return string(data)
 }
 
-// hashText 计算文本的 SHA1 哈希值
+// hashText 计算文本 SHA1，用于记录 step 输入输出快照。
 func hashText(value string) string {
 	sum := sha1.Sum([]byte(value))
 	return hex.EncodeToString(sum[:])

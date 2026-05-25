@@ -11,19 +11,19 @@ import (
 	"gin-biz-web-api/model"
 )
 
-0// Service Agent V2 业务服务层
+// Service 是 Agent V2 的应用服务层，负责把 HTTP 请求编排成一次 Agent Run。
 type Service struct {
 	dao      *agent_v2_dao.AgentV2DAO
 	executor *runtime.Executor
 }
 
-// CreateRunRequest 创建运行请求参数
+// CreateRunRequest 是创建 Agent Run 的请求体。
 type CreateRunRequest struct {
 	Content  string `json:"content" form:"content" binding:"required"`
 	TaskType string `json:"task_type" form:"task_type"`
 }
 
-// NewService 创建 Service 实例
+// NewService 创建应用服务，并手动装配 DAO 与运行时执行器。
 func NewService() *Service {
 	dao := agent_v2_dao.NewAgentV2DAO()
 	return &Service{
@@ -32,13 +32,20 @@ func NewService() *Service {
 	}
 }
 
-// CreateRun 创建并执行一个新的 Agent 运行
-func (svc *Service) CreateRun(ctx context.Context, userID uint, conversationID uint, request CreateRunRequest) (map[string]interface{}, error) {
+// CreateRun 创建用户消息、Agent Run，并立即执行第一版 mock workflow。
+func (svc *Service) CreateRun(
+	ctx context.Context,
+	userID uint,
+	conversationID uint,
+	request CreateRunRequest,
+) (map[string]interface{}, error) {
+	// 第一步：校验会话归属，v2 接口不能跨用户创建 run。
 	conversation, err := svc.dao.FindConversation(userID, conversationID)
 	if err != nil {
 		return nil, err
 	}
 
+	// 第二步：保存触发本次 Agent Run 的用户消息。
 	message := model.Message{
 		ConversationID: conversation.ID,
 		UserID:         userID,
@@ -50,6 +57,7 @@ func (svc *Service) CreateRun(ctx context.Context, userID uint, conversationID u
 		return nil, err
 	}
 
+	// 第三步：创建结构化 RunState，后续所有 Agent 节点都读写这份状态。
 	state := domain.RunState{
 		UserID:         userID,
 		ConversationID: conversation.ID,
@@ -65,6 +73,7 @@ func (svc *Service) CreateRun(ctx context.Context, userID uint, conversationID u
 		},
 	}
 
+	// 第四步：先落库 Agent Run，再把 run_id 回写到 RunState。
 	run := model.AgentRun{
 		ConversationID:   conversation.ID,
 		UserID:           userID,
@@ -81,6 +90,7 @@ func (svc *Service) CreateRun(ctx context.Context, userID uint, conversationID u
 	}
 	_ = svc.dao.UpdateMessageAgentRunID(message.ID, run.ID)
 
+	// 第五步：执行固定 mock workflow，验证 runtime/step/timeline 的基础链路。
 	state.RunID = run.ID
 	flow := workflow.MockImageGenerationWorkflow()
 	finalState, err := svc.executor.Execute(ctx, state, flow)
@@ -93,6 +103,7 @@ func (svc *Service) CreateRun(ctx context.Context, userID uint, conversationID u
 		}, err
 	}
 
+	// 第六步：重新读取 run 和 steps，返回给前端作为第一版 timeline。
 	run, _ = svc.dao.FindRun(userID, run.ID)
 	steps, err := svc.dao.ListSteps(userID, run.ID)
 	if err != nil {
@@ -108,7 +119,7 @@ func (svc *Service) CreateRun(ctx context.Context, userID uint, conversationID u
 	}, nil
 }
 
-// GetRun 获取 Agent 运行信息
+// GetRun 读取 Agent Run 和已保存的 step timeline。
 func (svc *Service) GetRun(userID uint, runID uint) (map[string]interface{}, error) {
 	run, err := svc.dao.FindRun(userID, runID)
 	if err != nil {
@@ -124,7 +135,7 @@ func (svc *Service) GetRun(userID uint, runID uint) (map[string]interface{}, err
 	}, nil
 }
 
-// ListRunEvents 列出 Agent 运行的事件（步骤）
+// ListRunEvents 读取 SSE 事件源，目前直接复用 step timeline。
 func (svc *Service) ListRunEvents(userID uint, runID uint) ([]model.AgentStep, error) {
 	if _, err := svc.dao.FindRun(userID, runID); err != nil {
 		return nil, err
@@ -132,7 +143,7 @@ func (svc *Service) ListRunEvents(userID uint, runID uint) ([]model.AgentStep, e
 	return svc.dao.ListSteps(userID, runID)
 }
 
-// coalesce 如果值为空则返回默认值
+// coalesce 在请求未指定值时返回默认值。
 func coalesce(value string, fallback string) string {
 	if value == "" {
 		return fallback
@@ -140,7 +151,7 @@ func coalesce(value string, fallback string) string {
 	return value
 }
 
-// mustJSON 将对象序列化为 JSON，出错时返回空对象
+// mustJSON 将对象序列化为 JSON，序列化失败时返回空对象字符串。
 func mustJSON(value interface{}) string {
 	data, err := json.Marshal(value)
 	if err != nil {
