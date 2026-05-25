@@ -77,12 +77,74 @@ func TestServiceAuthorizeDownloadUsesRepositoryOwnershipCheck(t *testing.T) {
 	}
 }
 
+func TestServiceCreateCandidateGroupAssignsSharedGroupID(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo)
+
+	artifacts, versions, err := svc.CreateCandidateGroup(CreateCandidateGroupInput{
+		AgentRunID:     11,
+		UserID:         7,
+		ConversationID: 9,
+		Artifacts: []CreateArtifactWithVersionInput{
+			{
+				Artifact: model.Artifact{Name: "candidate-1.png", Kind: "image", MimeType: "image/png", ObjectKey: "objects/1.png"},
+				Version:  model.ArtifactVersion{Operation: "generate", ObjectKey: "objects/1.png"},
+			},
+			{
+				Artifact: model.Artifact{Name: "candidate-2.png", Kind: "image", MimeType: "image/png", ObjectKey: "objects/2.png"},
+				Version:  model.ArtifactVersion{Operation: "generate", ObjectKey: "objects/2.png"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateCandidateGroup() error = %v", err)
+	}
+	if len(artifacts) != 2 || len(versions) != 2 {
+		t.Fatalf("got %d artifacts and %d versions, want 2 and 2", len(artifacts), len(versions))
+	}
+	if artifacts[0].ArtifactGroupID == "" {
+		t.Fatal("candidate group ID was empty")
+	}
+	if artifacts[0].ArtifactGroupID != artifacts[1].ArtifactGroupID {
+		t.Fatalf("group IDs = %q and %q, want same", artifacts[0].ArtifactGroupID, artifacts[1].ArtifactGroupID)
+	}
+	if artifacts[0].AgentRunID != 11 || artifacts[0].UserID != 7 || artifacts[0].ConversationID != 9 {
+		t.Fatalf("artifact defaults were not applied: %#v", artifacts[0])
+	}
+}
+
+func TestServiceSelectArtifactMarksSelectedAndWritesFeedback(t *testing.T) {
+	repo := &fakeRepository{artifact: model.Artifact{BaseModel: model.BaseModel{ID: 3}, UserID: 7}}
+	svc := NewService(repo)
+
+	err := svc.SelectArtifact(SelectArtifactInput{
+		UserID:            7,
+		ArtifactID:        3,
+		ArtifactVersionID: 5,
+	})
+	if err != nil {
+		t.Fatalf("SelectArtifact() error = %v", err)
+	}
+	if repo.updatedArtifactID != 3 {
+		t.Fatalf("updated artifact ID = %d, want 3", repo.updatedArtifactID)
+	}
+	if selectedAt, ok := repo.updatedArtifactAttrs["selected_at"].(int); !ok || selectedAt == 0 {
+		t.Fatalf("selected_at update = %#v, want non-zero int", repo.updatedArtifactAttrs["selected_at"])
+	}
+	if repo.feedback.FeedbackType != FeedbackTypeSelected {
+		t.Fatalf("feedback type = %q, want %q", repo.feedback.FeedbackType, FeedbackTypeSelected)
+	}
+}
+
 type fakeRepository struct {
-	artifact        model.Artifact
-	createdArtifact bool
-	createdVersion  bool
-	findUserID      uint
-	findArtifactID  uint
+	artifact             model.Artifact
+	createdArtifact      bool
+	createdVersion       bool
+	feedback             model.ArtifactFeedback
+	findUserID           uint
+	findArtifactID       uint
+	updatedArtifactID    uint
+	updatedArtifactAttrs map[string]interface{}
 }
 
 func (repo *fakeRepository) CreateArtifact(artifact *model.Artifact) error {
@@ -100,6 +162,12 @@ func (repo *fakeRepository) FindArtifact(userID uint, artifactID uint) (model.Ar
 	return repo.artifact, nil
 }
 
+func (repo *fakeRepository) UpdateArtifact(artifactID uint, attrs map[string]interface{}) error {
+	repo.updatedArtifactID = artifactID
+	repo.updatedArtifactAttrs = attrs
+	return nil
+}
+
 func (repo *fakeRepository) ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error) {
 	return []model.Artifact{}, nil
 }
@@ -115,5 +183,6 @@ func (repo *fakeRepository) ListArtifactVersions(userID uint, artifactID uint) (
 }
 
 func (repo *fakeRepository) CreateArtifactFeedback(feedback *model.ArtifactFeedback) error {
+	repo.feedback = *feedback
 	return nil
 }

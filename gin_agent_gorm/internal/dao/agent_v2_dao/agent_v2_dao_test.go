@@ -9,6 +9,7 @@ type runDAOContract interface {
 	CreateRun(run *model.AgentRun) error
 	UpdateRun(runID uint, attrs map[string]interface{}) error
 	FindRun(userID uint, runID uint) (model.AgentRun, error)
+	FindRunByIdempotencyKey(userID uint, idempotencyKey string) (model.AgentRun, error)
 }
 
 type stepDAOContract interface {
@@ -20,6 +21,7 @@ type stepDAOContract interface {
 type artifactDAOContract interface {
 	CreateArtifact(artifact *model.Artifact) error
 	FindArtifact(userID uint, artifactID uint) (model.Artifact, error)
+	UpdateArtifact(artifactID uint, attrs map[string]interface{}) error
 	ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error)
 	CreateArtifactVersion(version *model.ArtifactVersion) error
 	ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error)

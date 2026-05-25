@@ -17,6 +17,11 @@ func (dao *AgentV2DAO) FindArtifact(userID uint, artifactID uint) (model.Artifac
 	return artifact, err
 }
 
+// UpdateArtifact updates artifact metadata such as selected state or rank score.
+func (dao *AgentV2DAO) UpdateArtifact(artifactID uint, attrs map[string]interface{}) error {
+	return database.DB.Model(&model.Artifact{}).Where("id = ?", artifactID).Updates(attrs).Error
+}
+
 // ListArtifacts 查询指定会话下当前用户有权访问的产物。
 func (dao *AgentV2DAO) ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error) {
 	var artifacts []model.Artifact

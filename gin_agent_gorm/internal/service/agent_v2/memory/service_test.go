@@ -61,11 +61,29 @@ func TestServiceWriteCreatesMemoryAndAuditEvent(t *testing.T) {
 	}
 }
 
+func TestServiceDeleteSoftDeletesMemoryAndWritesAuditEvent(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo)
+
+	err := svc.Delete(7, 10)
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if repo.deletedUserID != 7 || repo.deletedMemoryID != 10 {
+		t.Fatalf("deleted userID=%d memoryID=%d, want 7 and 10", repo.deletedUserID, repo.deletedMemoryID)
+	}
+	if repo.event.EventType != EventTypeDeleted || repo.event.MemoryID != 10 {
+		t.Fatalf("event = %#v, want deleted event for memory 10", repo.event)
+	}
+}
+
 type fakeRepository struct {
-	filter   agent_v2_dao.MemoryFilter
-	memories []model.ContextMemory
-	usedIDs  []uint
-	event    model.MemoryEvent
+	filter          agent_v2_dao.MemoryFilter
+	memories        []model.ContextMemory
+	usedIDs         []uint
+	event           model.MemoryEvent
+	deletedUserID   uint
+	deletedMemoryID uint
 }
 
 func (repo *fakeRepository) CreateMemory(memory *model.ContextMemory) error {
@@ -84,6 +102,8 @@ func (repo *fakeRepository) UpdateMemoryUsage(memoryID uint) error {
 }
 
 func (repo *fakeRepository) SoftDeleteMemory(userID uint, memoryID uint) error {
+	repo.deletedUserID = userID
+	repo.deletedMemoryID = memoryID
 	return nil
 }
 

@@ -38,3 +38,12 @@ func (dao *AgentV2DAO) FindRun(userID uint, runID uint) (model.AgentRun, error) 
 	err := database.DB.Where("user_id = ? AND id = ?", userID, runID).First(&run).Error
 	return run, err
 }
+
+// FindRunByIdempotencyKey returns an existing run for a user-supplied idempotency key.
+func (dao *AgentV2DAO) FindRunByIdempotencyKey(userID uint, idempotencyKey string) (model.AgentRun, error) {
+	var run model.AgentRun
+	err := database.DB.Where("user_id = ? AND idempotency_key = ?", userID, idempotencyKey).
+		Order("id desc").
+		First(&run).Error
+	return run, err
+}

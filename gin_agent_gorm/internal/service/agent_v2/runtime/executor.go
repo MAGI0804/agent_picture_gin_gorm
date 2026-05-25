@@ -52,6 +52,11 @@ func (executor *Executor) Execute(
 		_ = executor.failRun(state.RunID, err)
 		return state, err
 	}
+	if state.Budget.MaxSteps > 0 && len(nodes) > state.Budget.MaxSteps {
+		err := errors.Errorf("step budget exceeded: workflow requires %d steps, max_steps is %d", len(nodes), state.Budget.MaxSteps)
+		_ = executor.failRun(state.RunID, err)
+		return state, err
+	}
 
 	for _, node := range nodes {
 		start := time.Now()
@@ -157,8 +162,33 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		if prompt, ok := result.Output["positive_prompt"].(string); ok {
 			state.Prompts.PositivePrompt = prompt
 		}
+	case "vision_review_agent":
+		if score, ok := result.Output["overall_score"].(float64); ok {
+			state.Review.OverallScore = score
+		}
+		state.Review.Issues = parseIssueList(result.Output["issues"])
+		if shouldRefine, ok := result.Output["should_refine"].(bool); ok {
+			state.Review.ShouldRefine = shouldRefine
+		}
 	}
 	return state
+}
+
+func parseIssueList(value interface{}) []string {
+	switch issues := value.(type) {
+	case []string:
+		return issues
+	case []interface{}:
+		result := make([]string, 0, len(issues))
+		for _, issue := range issues {
+			if text, ok := issue.(string); ok {
+				result = append(result, text)
+			}
+		}
+		return result
+	default:
+		return []string{}
+	}
 }
 
 // mustJSON 将对象序列化为 JSON，序列化失败时返回空对象字符串。

@@ -2,14 +2,21 @@ package artifact
 
 import (
 	"errors"
+	"fmt"
+	"time"
 
 	"gin-biz-web-api/model"
+)
+
+const (
+	FeedbackTypeSelected = "selected"
 )
 
 // Repository 定义产物服务所需的持久化操作接口。
 type Repository interface {
 	CreateArtifact(artifact *model.Artifact) error
 	FindArtifact(userID uint, artifactID uint) (model.Artifact, error)
+	UpdateArtifact(artifactID uint, attrs map[string]interface{}) error
 	ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error)
 	CreateArtifactVersion(version *model.ArtifactVersion) error
 	ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error)
@@ -25,6 +32,22 @@ type Service struct {
 type CreateArtifactWithVersionInput struct {
 	Artifact model.Artifact
 	Version  model.ArtifactVersion
+}
+
+// CreateCandidateGroupInput contains a set of generated candidates for one run.
+type CreateCandidateGroupInput struct {
+	AgentRunID      uint
+	UserID          uint
+	ConversationID  uint
+	ArtifactGroupID string
+	Artifacts       []CreateArtifactWithVersionInput
+}
+
+// SelectArtifactInput records a user's selected candidate.
+type SelectArtifactInput struct {
+	UserID            uint
+	ArtifactID        uint
+	ArtifactVersionID uint
 }
 
 // NewService 创建产物服务实例。
@@ -68,6 +91,45 @@ func (svc *Service) CreateArtifactWithVersion(
 	return artifact, version, nil
 }
 
+// CreateCandidateGroup creates multiple artifact candidates under one group ID.
+func (svc *Service) CreateCandidateGroup(
+	input CreateCandidateGroupInput,
+) ([]model.Artifact, []model.ArtifactVersion, error) {
+	if input.UserID == 0 {
+		return nil, nil, errors.New("candidate group user_id is required")
+	}
+	if input.ConversationID == 0 {
+		return nil, nil, errors.New("candidate group conversation_id is required")
+	}
+	if len(input.Artifacts) == 0 {
+		return nil, nil, errors.New("candidate group requires at least one artifact")
+	}
+	groupID := input.ArtifactGroupID
+	if groupID == "" {
+		groupID = fmt.Sprintf("run-%d-candidates-%d", input.AgentRunID, time.Now().UnixNano())
+	}
+
+	artifacts := make([]model.Artifact, 0, len(input.Artifacts))
+	versions := make([]model.ArtifactVersion, 0, len(input.Artifacts))
+	for _, candidate := range input.Artifacts {
+		candidate.Artifact.UserID = input.UserID
+		candidate.Artifact.ConversationID = input.ConversationID
+		candidate.Artifact.AgentRunID = input.AgentRunID
+		candidate.Artifact.ArtifactGroupID = groupID
+		if candidate.Version.AgentRunID == 0 {
+			candidate.Version.AgentRunID = input.AgentRunID
+		}
+
+		artifact, version, err := svc.CreateArtifactWithVersion(candidate)
+		if err != nil {
+			return artifacts, versions, err
+		}
+		artifacts = append(artifacts, artifact)
+		versions = append(versions, version)
+	}
+	return artifacts, versions, nil
+}
+
 // ListArtifacts 列出用户和会话范围内的产物。
 func (svc *Service) ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error) {
 	return svc.repo.ListArtifacts(userID, conversationID)
@@ -81,6 +143,30 @@ func (svc *Service) ListVersions(userID uint, artifactID uint) ([]model.Artifact
 // AuthorizeDownload 通过所有权验证解析可下载的产物。
 func (svc *Service) AuthorizeDownload(userID uint, artifactID uint) (model.Artifact, error) {
 	return svc.repo.FindArtifact(userID, artifactID)
+}
+
+// SelectArtifact marks an artifact as the selected candidate and records feedback.
+func (svc *Service) SelectArtifact(input SelectArtifactInput) error {
+	if input.UserID == 0 {
+		return errors.New("select artifact user_id is required")
+	}
+	if input.ArtifactID == 0 {
+		return errors.New("select artifact artifact_id is required")
+	}
+	if _, err := svc.repo.FindArtifact(input.UserID, input.ArtifactID); err != nil {
+		return err
+	}
+	if err := svc.repo.UpdateArtifact(input.ArtifactID, map[string]interface{}{
+		"selected_at": int(time.Now().Unix()),
+	}); err != nil {
+		return err
+	}
+	return svc.RecordFeedback(model.ArtifactFeedback{
+		ArtifactID:        input.ArtifactID,
+		ArtifactVersionID: input.ArtifactVersionID,
+		UserID:            input.UserID,
+		FeedbackType:      FeedbackTypeSelected,
+	})
 }
 
 // RecordFeedback 写入用户对产物或产物版本的反馈。

@@ -80,6 +80,55 @@ func (ctrl *AgentV2Controller) RunEvents(c *gin.Context) {
 	c.Writer.Flush()
 }
 
+// SearchMemories 查询当前用户的 V2 记忆。
+func (ctrl *AgentV2Controller) SearchMemories(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	var request app.MemorySearchRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	memories, err := app.NewService().SearchMemories(userID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"memories": memories})
+}
+
+// DeleteMemory 删除当前用户的一条 V2 记忆。
+func (ctrl *AgentV2Controller) DeleteMemory(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	memoryID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	if err := app.NewService().DeleteMemory(userID, memoryID); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"deleted": true})
+}
+
+// SelectArtifact 选择一个候选产物。
+func (ctrl *AgentV2Controller) SelectArtifact(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.SelectArtifactRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	if err := app.NewService().SelectArtifact(userID, artifactID, request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"selected": true})
+}
+
 // parseID 解析 URL 参数中的 ID
 func (ctrl *AgentV2Controller) parseID(c *gin.Context, key string) (uint, bool) {
 	id, err := strconv.ParseUint(c.Param(key), 10, 64)
