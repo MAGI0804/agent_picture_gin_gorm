@@ -372,6 +372,7 @@ type TaskType = 'text_chat' | 'image_generation'
 type RightTab = 'artifacts' | 'messages' | 'steps'
 
 interface ModelOutput {
+  content?: string
   thinking_content?: string
 }
 
@@ -467,6 +468,12 @@ const avatarInitial = computed(() => {
   return Array.from(userDisplayName.value.trim())[0]?.toUpperCase() || 'U'
 })
 const generatingStatusText = computed(() => {
+  if (sendingNormal.value && smartQaActive.value) {
+    return '正在生成针对性问题...'
+  }
+  if (sendingAnswer.value && smartQaActive.value) {
+    return '正在生成完整提示词...'
+  }
   if (sendingAnswer.value || activeSendingTaskType.value === 'image_generation') {
     return '任务提交成功，正在生成图片...'
   }
@@ -697,7 +704,8 @@ async function optimizeNormalPrompt() {
 async function startSmartQa() {
   const content = normalText.value.trim()
   if (sendingNormal.value || !content) return
-  taskType.value = 'image_generation'
+  const switchedFromTextMode = taskType.value !== 'image_generation'
+  switchComposerToImageMode()
   activeSendingTaskType.value = 'image_generation'
   normalText.value = ''
   clearPromptOptimization()
@@ -710,9 +718,12 @@ async function startSmartQa() {
     const conversationId = await ensureConversation()
     if (!conversationId) return
     messages.value.push(createLocalMessage(conversationId, 'normal', content, {
-      displayModelName: selectedModelNameForTask('text_chat'),
+      displayModelName: selectedModelNameForTask('image_generation'),
       displayDialogType: '智能问答'
     }))
+    if (switchedFromTextMode) {
+      appendProcessStep('已自动切换到图片模式', selectedModelNameForTask('image_generation'), 'completed')
+    }
     appendProcessStep('进入智能问答', `原始需求：${content}`, 'completed')
     appendProcessStep('正在生成针对性问题', '调用 deepseek-v4-pro 输出图片生成前需要确认的问题。', 'running')
     showLocalThinking('smart_question_agent', '正在根据用户需求生成针对性问题。')
@@ -742,6 +753,10 @@ async function startSmartQa() {
   } finally {
     sendingNormal.value = false
   }
+}
+
+function switchComposerToImageMode() {
+  taskType.value = 'image_generation'
 }
 
 function clearPromptOptimization() {
@@ -833,41 +848,49 @@ async function sendAnswer() {
   const rawAnswer = answerText.value.trim()
   const questionsSnapshot = [...pendingQuestions.value]
   const answeredQuestionIds = questionsSnapshot.map(question => question.id)
-  const mergedContent = buildQuestionAnswerPrompt(smartQaOriginalPrompt.value, questionsSnapshot, rawAnswer)
   let requestSubmitted = false
-  activeSendingTaskType.value = 'image_generation'
+  activeSendingTaskType.value = 'text_chat'
   sendingAnswer.value = true
   try {
     appendProcessStep('已收到补充回答', rawAnswer, 'completed')
-    const promptPayload = await prepareImagePromptForSend(mergedContent, false)
+    appendProcessStep(
+      '正在生成完整图片提示词',
+      buildQuestionAnswerPrompt(smartQaOriginalPrompt.value, questionsSnapshot, rawAnswer),
+      'running'
+    )
     answerText.value = ''
     messages.value.push(createLocalMessage(conversationId, 'answer_to_questions', rawAnswer, {
-      displayModelName: selectedModelNameForTask('image_generation'),
+      displayModelName: selectedModelNameForTask('text_chat'),
       displayDialogType: '补充回答'
     }))
     requestSubmitted = true
-    showLocalThinking('frontend_dispatch', '已提交补充回答，继续执行生成流程。')
-    appendProcessStep('已提交图片模型', promptPayload.content, 'completed')
+    showLocalThinking('smart_prompt_agent', '正在结合原始提示词和补充回答生成完整图片提示词。')
 
     const data = await apiFetch<SendMessageResponse>(`/api/conversations/${conversationId}/messages`, {
       method: 'POST',
       body: JSON.stringify({
         input_type: 'answer_to_questions',
         task_type: 'image_generation',
-        content: promptPayload.content,
+        content: rawAnswer,
+        question_mode: 'smart_qa_prompt',
         text_model_config_id: selectedTextModelId.value,
         image_model_config_id: selectedImageModelId.value,
         original_prompt: smartQaOriginalPrompt.value,
         answered_question_ids: answeredQuestionIds,
-        is_optimized: promptPayload.isOptimized,
-        optimized_prompt: promptPayload.optimizedPrompt,
         stream: true,
         return_reasoning: true
       })
     })
-    pendingQuestions.value = []
-    resetSmartQaState()
     await applySendResponse(data)
+    pendingQuestions.value = []
+    const finalPrompt = (data.model_output?.content || data.assistant_message?.optimized_prompt || '').trim()
+    if (finalPrompt) {
+      optimizedPromptText.value = finalPrompt
+      optimizationError.value = ''
+      normalText.value = smartQaOriginalPrompt.value
+      completeLastRunningProcessStep('完整提示词已生成，等待用户确认', finalPrompt, 'completed')
+      appendProcessStep('请确认是否使用该提示词生成图片', finalPrompt, 'completed')
+    }
   } catch (error) {
     if (!requestSubmitted) {
       answerText.value = rawAnswer
@@ -1175,6 +1198,7 @@ function dialogTypeLabel(message: Message) {
   const taskType = run?.task_type || run?.intent || ''
   if (message.input_type === 'answer_to_questions') return '补充回答'
   if (message.input_type === 'follow_up_questions') return '智能问答'
+  if (message.input_type === 'smart_prompt') return '完整提示词'
   if (taskType === 'image_generation') return '图片问答'
   if (taskType === 'html_generation') return 'HTML 问答'
   if (taskType === 'mixed_generation') return '混合问答'
@@ -1219,6 +1243,7 @@ function inputTypeLabel(inputType: string) {
     normal: '普通输入',
     answer_to_questions: '追问回答',
     follow_up_questions: '追问',
+    smart_prompt: '完整提示词',
     agent_result: '生成结果',
     error: '错误'
   }

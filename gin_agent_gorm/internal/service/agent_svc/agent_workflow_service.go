@@ -446,20 +446,167 @@ func (svc *AgentService) generateFollowUpQuestions(userID uint, content string, 
 	}
 	systemPrompt := strings.Join([]string{
 		"You are the planner agent for an image generation workflow.",
+		"请提出针对下段提示词的问题，使得提示词更加立体。",
 		"Ask up to 3 targeted Chinese follow-up questions before generation.",
-		"Questions must focus on goal, aspect ratio or size, style, required elements, and avoided elements.",
+		"Questions must focus on visual goal, aspect ratio or size, style, required elements, text or logo details, and avoided elements.",
 		"Return one question per line. Do not add numbering explanations or markdown.",
 	}, " ")
 	result, err := NewProviderWithConfig(config).Chat(ChatRequest{
 		System: systemPrompt,
 		Messages: []ChatMessage{
-			{Role: "user", Content: content},
+			{Role: "user", Content: "请针对下面这段提示词提出问题，使它更加立体、可执行：\n\n" + content},
 		},
 		ModelConfig:     config,
 		Stream:          true,
 		ReturnReasoning: true,
 	})
 	return result, runtimeTextModelName(config), err
+}
+
+func (svc *AgentService) createSmartPromptTurn(
+	userID uint,
+	conversation model.Conversation,
+	userMessage model.Message,
+	run model.AgentRun,
+	request agent_request.SendMessageRequest,
+) (map[string]interface{}, error) {
+	config, err := svc.resolveRuntimeModelConfig(userID, "text", request.TextModelConfigID)
+	if err != nil {
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
+		return nil, err
+	}
+
+	questions, _ := svc.dao.ListConversationQuestions(userID, conversation.ID, 20)
+	selectedQuestions := selectQuestionsByIDs(questions, request.AnsweredQuestionIDs)
+	promptInput := buildSmartPromptInput(request.OriginalPrompt, selectedQuestions, request.Content)
+	systemPrompt := strings.Join([]string{
+		"You are a senior image generation prompt architect.",
+		"Based on the original prompt and the user's answers, write one complete Chinese prompt for an image generation model.",
+		"Make it richer and more three-dimensional: include subject, composition, style, scene, details, text/logo requirements, positions, constraints, and avoidances when available.",
+		"Return only the final prompt. Do not add markdown, numbering, commentary, or alternatives.",
+	}, " ")
+
+	result, err := NewProviderWithConfig(config).Chat(ChatRequest{
+		System: systemPrompt,
+		Messages: []ChatMessage{
+			{Role: "user", Content: promptInput},
+		},
+		ModelConfig:     config,
+		Stream:          true,
+		ReturnReasoning: true,
+	})
+	if err != nil {
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
+		return nil, err
+	}
+
+	finalPrompt := strings.TrimSpace(result.Content)
+	if finalPrompt == "" {
+		err := errors.New("智能问答生成的完整提示词为空")
+		_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{"status": "failed", "error_message": err.Error()})
+		return nil, err
+	}
+
+	run.TaskType = "image_generation"
+	run.TextModelName = runtimeTextModelName(config)
+	run.IsOptimized = true
+	run.OptimizedPrompt = finalPrompt
+	run.Status = "completed"
+	_ = svc.dao.UpdateAgentRun(run.ID, map[string]interface{}{
+		"task_type":        run.TaskType,
+		"text_model_name":  run.TextModelName,
+		"is_optimized":     true,
+		"optimized_prompt": finalPrompt,
+		"status":           run.Status,
+	})
+
+	_ = svc.createStepWithThinking(
+		run.ID,
+		"smart_prompt_agent",
+		promptInput,
+		finalPrompt,
+		"结合原始提示词与用户对追问的回答，调用文本模型生成完整图片提示词，等待用户确认后再生成图片。",
+		result.ReasoningContent,
+	)
+
+	assistantMessage := model.Message{
+		ConversationID:  conversation.ID,
+		UserID:          userID,
+		Role:            "assistant",
+		InputType:       "smart_prompt",
+		Content:         "已根据你的回答生成完整图片提示词，请确认是否使用它生成图片。",
+		IsOptimized:     true,
+		OriginalPrompt:  strings.TrimSpace(request.OriginalPrompt),
+		OptimizedPrompt: finalPrompt,
+		AgentRunID:      run.ID,
+	}
+	if err := svc.dao.CreateMessage(&assistantMessage); err != nil {
+		return nil, err
+	}
+
+	steps, _ := svc.dao.ListAgentSteps(userID, run.ID)
+	return map[string]interface{}{
+		"user_message":        userMessage,
+		"assistant_message":   assistantMessage,
+		"follow_up_questions": []model.FollowUpQuestion{},
+		"artifacts":           []model.Artifact{},
+		"agent_run":           run,
+		"agent_steps":         steps,
+		"model_output": map[string]interface{}{
+			"content":          finalPrompt,
+			"thinking_content": result.ReasoningContent,
+			"finish_reason":    "stop",
+			"usage":            model.TokenUsage{},
+		},
+		"conversation": conversation,
+	}, nil
+}
+
+func selectQuestionsByIDs(questions []model.FollowUpQuestion, ids []uint) []model.FollowUpQuestion {
+	if len(ids) == 0 {
+		return questions
+	}
+	byID := make(map[uint]model.FollowUpQuestion, len(questions))
+	for _, question := range questions {
+		byID[question.ID] = question
+	}
+	selected := make([]model.FollowUpQuestion, 0, len(ids))
+	for _, id := range ids {
+		if question, ok := byID[id]; ok {
+			selected = append(selected, question)
+		}
+	}
+	return selected
+}
+
+func buildSmartPromptInput(
+	originalPrompt string,
+	questions []model.FollowUpQuestion,
+	fallbackAnswer string,
+) string {
+	lines := []string{
+		"请在当前提示词基础上，结合刚刚回答的问题，输出一段完整、立体、可直接用于图片生成模型的提示词。",
+		"",
+		"原始提示词：",
+		strings.TrimSpace(originalPrompt),
+		"",
+		"问题与回答：",
+	}
+	for index, question := range questions {
+		answer := strings.TrimSpace(question.Answer)
+		if answer == "" {
+			answer = strings.TrimSpace(fallbackAnswer)
+		}
+		lines = append(
+			lines,
+			fmt.Sprintf("%d. 问题：%s", index+1, strings.TrimSpace(question.Question)),
+			"回答："+answer,
+		)
+	}
+	if len(questions) == 0 {
+		lines = append(lines, "回答："+strings.TrimSpace(fallbackAnswer))
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
 func parseQuestionLines(content string) []string {

@@ -185,12 +185,24 @@ func (svc *AgentService) SendMessage(userID uint, conversationID uint, request a
 	if err := svc.dao.AnswerFollowUpQuestions(userID, request.AnsweredQuestionIDs, content); err != nil {
 		return nil, err
 	}
+	if isSmartPromptMode(request.QuestionMode) {
+		return svc.createSmartPromptTurn(userID, conversation, userMessage, run, request)
+	}
 	return svc.executeGeneration(userID, conversation, userMessage, run, content, request)
 }
 
 func isSmartQuestionMode(questionMode string) bool {
 	switch strings.ToLower(strings.TrimSpace(questionMode)) {
 	case "smart_qa", "smart_question", "clarify":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSmartPromptMode(questionMode string) bool {
+	switch strings.ToLower(strings.TrimSpace(questionMode)) {
+	case "smart_qa_prompt", "smart_prompt", "qa_prompt":
 		return true
 	default:
 		return false
