@@ -954,3 +954,481 @@ type ArtifactVersion = {
 - Voyager: https://github.com/MineDojo/Voyager
 - OpenAI Image Generation 官方文档: https://platform.openai.com/docs/guides/image-generation
 
+## 21. V2 重写架构优化
+
+本节按“项目可以重写”的前提重新定义目标架构。结论是：不要继续在旧 `agent_svc` 中堆逻辑，应将图片 Agent 平台重写为一个模块化单体，核心域按 Runtime、Workflow、Memory、Artifact、Tool、Evaluation、Security、Workspace API 明确拆分。旧接口可以保留兼容，但新能力全部进入 `agent_v2`。
+
+### 21.1 总体架构
+
+```mermaid
+flowchart TD
+  FE["Frontend Workspace"] --> API["API Layer"]
+  API --> App["Application Services"]
+
+  App --> Runtime["Agent Runtime"]
+  Runtime --> Workflow["Workflow DAG / State Machine"]
+  Runtime --> Ledger["Task Ledger"]
+  Runtime --> Budget["Budget / Idempotency / Lock"]
+
+  Workflow --> Agents["Agent Nodes"]
+  Agents --> Memory["Memory Service"]
+  Agents --> Tools["Tool Registry"]
+  Agents --> Artifact["Artifact Service"]
+  Agents --> Eval["Evaluation / Evolution"]
+
+  Memory --> MemoryStore["Memory Metadata DB"]
+  Memory --> VectorStore["Vector Index"]
+  Memory --> ObjectStore["Visual Memory Artifacts"]
+
+  Tools --> TextProvider["Text Provider"]
+  Tools --> ImageGen["Image Generation Provider"]
+  Tools --> ImageEdit["Image Edit Provider"]
+  Tools --> Vision["Vision Provider"]
+  Tools --> OCR["OCR Provider"]
+  Tools --> Segment["Segmentation Provider"]
+
+  Artifact --> ArtifactDB["Artifact Metadata / Version DB"]
+  Artifact --> BlobStore["Object Storage"]
+  Eval --> PromptVersions["Prompt Versions"]
+  Eval --> Reflections["Agent Reflections"]
+  Eval --> Feedback["Artifact Feedback"]
+```
+
+核心原则：
+
+- `Agent Runtime` 只负责执行，不负责具体业务判断。
+- `Workflow` 负责 DAG、状态机、任务依赖和重试策略。
+- `Agent Node` 只处理一个明确职责，并通过标准输入输出契约通信。
+- `Memory`、`Artifact`、`Tool`、`Evaluation` 都是独立服务，不能混进一个 service 文件。
+- 所有外部模型调用必须经过 `Tool Registry`，不能在业务代码中直接拼 HTTP。
+- 所有产物访问必须经过权限校验，不能直接暴露可预测静态路径。
+
+### 21.2 Agent 编排层：DAG 与状态机
+
+旧问题：固定流程无法支撑复杂任务、失败重试、暂停恢复、并行候选图和人工介入。
+
+目标设计：
+
+```text
+agent_v2/runtime
+  - Executor：推进 workflow
+  - StateStore：保存 RunState 快照
+  - StepRunner：执行单个节点
+  - RetryPolicy：控制失败重试
+  - LockManager：控制 run / artifact 资源锁
+  - BudgetManager：控制 token、图片次数、费用、耗时
+  - EventBus：推送 SSE / WebSocket 事件
+
+agent_v2/workflow
+  - DAG 定义
+  - 节点依赖
+  - 状态转移
+  - Human-in-the-loop 等待点
+```
+
+Run 状态固定为：
+
+```text
+created -> queued -> running -> waiting_user -> completed
+                              -> failed
+                              -> cancelled
+```
+
+Step 状态固定为：
+
+```text
+pending -> running -> completed
+                   -> retrying -> running
+                   -> failed
+                   -> skipped
+```
+
+每个节点必须声明：
+
+```json
+{
+  "key": "prompt_agent",
+  "depends_on": ["memory_agent", "requirement_agent"],
+  "input_schema": "PromptAgentInput",
+  "output_schema": "PromptAgentOutput",
+  "retry_policy": {
+    "max_attempts": 2,
+    "backoff_ms": 800
+  },
+  "idempotency_scope": "run_id + step_key + input_hash"
+}
+```
+
+### 21.3 记忆系统：分层记忆基础设施
+
+旧问题：`context_memories` 只有基础文本字段，无法支持跨 Agent 复用、视觉记忆、过期、权限和向量检索。
+
+目标设计：
+
+```text
+agent_v2/memory
+  - Retriever：组合检索
+  - Writer：记忆写入
+  - Extractor：从对话、反馈、run trace 中抽取候选记忆
+  - Ranker：语义、时效、反馈、置信度、复用度加权排序
+  - ConflictResolver：同一 scope 下的偏好冲突处理
+  - Expirer：过期和降权
+  - PermissionGuard：按 user_id / conversation_id / artifact_id 隔离
+```
+
+记忆命名空间：
+
+| namespace | 用途 |
+| --- | --- |
+| `conversation` | 当前会话短期事实 |
+| `user_profile` | 用户长期偏好 |
+| `visual_style` | 视觉风格、品牌色、构图偏好 |
+| `artifact_lineage` | 产物血缘、参考图、编辑历史 |
+| `tool_experience` | 模型和工具经验 |
+| `reflection` | 失败反思和改进策略 |
+
+检索排序：
+
+```text
+score =
+  semantic_score * 0.40
+  + recency_score * 0.15
+  + feedback_score * 0.20
+  + confidence * 0.15
+  + reuse_score * 0.10
+```
+
+写入原则：
+
+- 用户明确偏好才写 `user_profile`。
+- 高分产物才沉淀 `visual_style`。
+- 失败重试或低分反馈才写 `reflection`。
+- 模型能力限制和经验写 `tool_experience`。
+- 所有记忆必须包含 `user_id`、`namespace`、`source_type`、`source_id`。
+
+### 21.4 图片产物管理：版本链与血缘追溯
+
+旧问题：单层 artifact 无法回滚、继续编辑、候选图分组和模型效果分析。
+
+目标设计：
+
+```text
+artifact
+  - 表示一个逻辑产物，例如“科技海报主图”
+
+artifact_version
+  - 表示产物的一次生成、编辑、放大、裁剪或合成
+
+artifact_relation
+  - 表示参考图、mask、父子图、候选图之间的关系
+
+artifact_feedback
+  - 表示选择、下载、收藏、差评、重新生成等用户行为
+```
+
+必须记录：
+
+- prompt / negative prompt
+- provider / model
+- generation params
+- source refs
+- mask refs
+- parent version
+- quality scores
+- selected status
+- hash / object key / preview url
+
+候选图分组：
+
+```text
+artifact_group_id = 同一轮生成候选图分组
+rank_score        = Review / Ranker 打分
+selected_at       = 用户选择时间
+```
+
+### 21.5 Provider / Tool 抽象：按能力拆分
+
+旧问题：`Chat` / `Generate` 过粗，工具调用耦合，无法扩展 OCR、视觉理解和分割。
+
+目标接口：
+
+```go
+type TextProvider interface
+type ImageGenerationProvider interface
+type ImageEditProvider interface
+type VisionProvider interface
+type OCRProvider interface
+type SegmentationProvider interface
+type SafetyProvider interface
+```
+
+`Tool Registry` 必须保存能力描述：
+
+```json
+{
+  "name": "jimeng_text_to_image",
+  "kind": "image_generation",
+  "provider": "volcengine",
+  "model": "jimeng",
+  "limits": {
+    "max_prompt_chars": 750,
+    "supported_ratios": ["1:1", "16:9", "9:16"],
+    "max_candidates": 4
+  },
+  "capabilities": ["text_to_image"]
+}
+```
+
+Agent 不直接依赖具体模型，只依赖能力：
+
+```text
+Prompt Agent -> 查询 image_generation 工具限制
+Image Agent  -> 调用 ImageGenerationProvider
+Review Agent -> 调用 VisionProvider + OCRProvider
+Refiner Agent -> 调用 ImageEditProvider / SegmentationProvider
+```
+
+### 21.6 多 Agent 协同：共享状态与任务账本
+
+旧问题：多 Agent 只是多轮对话，没有共享状态、任务依赖和标准输出。
+
+目标结构：
+
+```text
+RunState
+  - run metadata
+  - user request
+  - constraints
+  - memory context
+  - prompt bundle
+  - tool results
+  - artifact refs
+  - review scores
+  - budget
+
+TaskLedger
+  - task_id
+  - owner_agent
+  - status
+  - depends_on
+  - input_refs
+  - output_refs
+  - retry_count
+```
+
+标准 Agent 输出：
+
+```json
+{
+  "status": "completed",
+  "summary": "生成 16:9 科技海报 prompt",
+  "tool_calls": [],
+  "artifacts": [],
+  "memory_writes": [],
+  "eval_scores": {},
+  "next_step": "image_generation_agent"
+}
+```
+
+协同模式：
+
+- 顺序流水线：普通文生图。
+- Planner + Tools：任务类型不确定。
+- Debate / Review：高价值品牌图。
+- DAG 并行：多候选图、多模型对比。
+- Human-in-the-loop：需求不足、安全风险或预算确认。
+
+### 21.7 Agent 自主进化闭环
+
+旧问题：无反馈、无反思、无 prompt 版本、无评测，Agent 无法持续优化。
+
+目标循环：
+
+```text
+Collect -> Reflect -> Distill -> Evaluate -> Promote
+```
+
+数据来源：
+
+- run trace
+- step output
+- artifact quality score
+- user feedback
+- retry reason
+- provider error
+- cost / latency
+
+产物：
+
+- `agent_reflections`
+- `agent_prompt_versions`
+- `context_memories(namespace=reflection/tool_experience)`
+- `eval_cases`
+- `eval_runs`
+
+上线规则：
+
+- 自动反思只进入 `draft`。
+- 高频问题或人工确认后才提升为规则。
+- prompt 模板必须支持 `draft/review/active/archived`。
+- 每次升级必须可回滚。
+
+### 21.8 Step 可观测性：全链路追踪
+
+旧问题：无法定位失败、无法统计成本、无法稳定驱动前端过程面板。
+
+`agent_steps` 必须记录：
+
+| 字段 | 用途 |
+| --- | --- |
+| `step_key` | 稳定节点标识 |
+| `attempt` | 重试次数 |
+| `provider_name` | 工具提供方 |
+| `model_name` | 模型名 |
+| `duration_ms` | 耗时 |
+| `cost_json` | token、图片次数、金额估算 |
+| `input_json` | 结构化输入 |
+| `output_json` | 结构化输出 |
+| `input_hash` | 幂等键 |
+| `output_hash` | 输出追踪 |
+| `error_code` | 归一化错误类型 |
+| `error_message` | 错误摘要 |
+
+前端只消费整理后的 `summary`、`status`、`duration_ms`、`eval_scores`，不直接展示原始推理内容。
+
+### 21.9 安全与合规
+
+必须实现：
+
+- Artifact 预览、下载、编辑都校验 `user_id` 和 `conversation_id`。
+- 上传文件限制 MIME、大小、像素，并重新编码。
+- object key 使用随机 ID，不允许可预测路径。
+- public preview 使用签名 URL 或鉴权代理。
+- 生成前后接入安全审查。
+- 日志脱敏，不保存 API key、完整敏感 URL、隐私内容。
+- 原始模型推理内容默认只内部存储，不直接给用户。
+- 删除用户记忆时必须软删除或记录审计。
+
+### 21.10 前端工作台
+
+前端目标从“聊天页”升级为：
+
+```text
+对话 + 产物 + 过程 + 版本 + 记忆 + 反馈
+```
+
+核心入口：
+
+- 记忆查看 / 编辑 / 删除。
+- 候选图对比。
+- 版本历史。
+- 选择这张。
+- 重新生成。
+- 局部修改。
+- 不满意原因。
+- 下载。
+- 偏好设置。
+- Agent step timeline。
+- Review / Eval 结果。
+
+新增类型：
+
+```ts
+type ArtifactVersion = {
+  id: number
+  artifactId: number
+  versionNo: number
+  operation: string
+  previewUrl: string
+  generationParams?: Record<string, unknown>
+  qualityScores?: Record<string, number>
+  selectedByUser?: boolean
+}
+```
+
+### 21.11 API 扩展
+
+新 API 必须覆盖完整闭环：
+
+```http
+POST /api/v2/conversations/:id/runs
+GET  /api/v2/runs/:id
+GET  /api/v2/runs/:id/events
+
+GET  /api/v2/conversations/:id/artifacts
+GET  /api/v2/artifacts/:id/versions
+POST /api/v2/artifacts/:id/feedback
+POST /api/v2/artifacts/:id/select
+POST /api/v2/artifacts/:id/edit
+GET  /api/v2/artifacts/:id/download
+
+GET    /api/v2/memories
+POST   /api/v2/memories/search
+PATCH  /api/v2/memories/:id
+DELETE /api/v2/memories/:id
+```
+
+Run 创建请求：
+
+```json
+{
+  "content": "生成一张科技感宣传图",
+  "task_type": "image_generation",
+  "workflow_mode": "auto",
+  "attachments": [],
+  "model_config": {
+    "text_model_config_id": 1,
+    "image_model_config_id": 2,
+    "vision_model_config_id": 3
+  },
+  "generation_options": {
+    "aspect_ratio": "16:9",
+    "candidate_count": 3,
+    "auto_review": true,
+    "auto_refine": true
+  }
+}
+```
+
+### 21.12 重写后的目录结构
+
+```text
+internal/
+  controller/
+    agent_v2_ctrl/
+  service/
+    agent_v2/
+      app/
+      domain/
+      runtime/
+      workflow/
+      agents/
+      memory/
+      artifact/
+      tools/
+      eval/
+      security/
+      event/
+      prompt/
+  dao/
+    agent_v2_dao/
+model/
+  agent_run_model.go
+  agent_step_model.go
+  context_memory_model.go
+  artifact_model.go
+  artifact_version_model.go
+  artifact_feedback_model.go
+  agent_prompt_version_model.go
+  agent_reflection_model.go
+```
+
+该结构的边界要求：
+
+- `domain` 不依赖 Gin、GORM、Redis、HTTP。
+- `runtime` 不直接调用 provider。
+- `agents` 不直接写 DB，只通过 service 接口写记忆、产物、评测。
+- `tools` 不依赖业务流程。
+- `artifact` 必须统一处理权限和 object key。
+- `memory` 必须统一处理 namespace、scope、rank、冲突。
+- `eval` 不直接修改 active prompt，只产生候选版本和反思。
