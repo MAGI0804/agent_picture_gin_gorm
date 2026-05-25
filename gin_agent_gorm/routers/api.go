@@ -24,6 +24,7 @@ func RegisterAPIRoutes(r *gin.Engine) {
 	registerTestRoutes(api)
 	registerAuthRoutes(api)
 	registerAgentRoutes(api)
+	registerAgentV2Routes(api)
 	registerExampleRoutes(api)
 }
 

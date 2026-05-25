@@ -11,11 +11,18 @@ type AgentRun struct {
 	Status           string `gorm:"column:status;size:32;not null;default:running" json:"status"`
 	Intent           string `gorm:"column:intent;size:64" json:"intent"`
 	TaskType         string `gorm:"column:task_type;size:64" json:"task_type"`
+	WorkflowName     string `gorm:"column:workflow_name;size:128" json:"workflow_name"`
+	WorkflowVersion  string `gorm:"column:workflow_version;size:64" json:"workflow_version"`
+	StateJSON        string `gorm:"column:state_json;type:text" json:"state_json"`
+	BudgetJSON       string `gorm:"column:budget_json;type:text" json:"budget_json"`
 	TextModelName    string `gorm:"column:text_model_name;size:128" json:"text_model_name"`
 	ImageModelName   string `gorm:"column:image_model_name;size:128" json:"image_model_name"`
 	IsOptimized      bool   `gorm:"column:is_optimized;not null;default:false" json:"is_optimized"`
 	OptimizedPrompt  string `gorm:"column:optimized_prompt;type:text" json:"optimized_prompt"`
 	ErrorMessage     string `gorm:"column:error_message;type:text" json:"error_message"`
+	StartedAt        int    `gorm:"column:started_at;not null;default:0" json:"started_at"`
+	CompletedAt      int    `gorm:"column:completed_at;not null;default:0" json:"completed_at"`
+	CancelledAt      int    `gorm:"column:cancelled_at;not null;default:0" json:"cancelled_at"`
 	CommonTimestampsField
 }
 
