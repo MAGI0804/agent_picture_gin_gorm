@@ -5,17 +5,17 @@ import (
 	"gin-biz-web-api/pkg/database"
 )
 
-// CreateToolInvocation writes one provider/tool invocation trace.
+// CreateToolInvocation 写入一条提供商/工具调用追踪记录。
 func (dao *AgentV2DAO) CreateToolInvocation(invocation *model.ToolInvocation) error {
 	return database.DB.Create(invocation).Error
 }
 
-// UpdateToolInvocation updates invocation status, output, cost, latency, or error.
+// UpdateToolInvocation 更新调用状态、输出、成本、延迟或错误信息。
 func (dao *AgentV2DAO) UpdateToolInvocation(invocationID uint, attrs map[string]interface{}) error {
 	return database.DB.Model(&model.ToolInvocation{}).Where("id = ?", invocationID).Updates(attrs).Error
 }
 
-// ListToolInvocationsByRun lists tool calls for a run after user ownership validation.
+// ListToolInvocationsByRun 用户权限验证后列出某次运行的工具调用。
 func (dao *AgentV2DAO) ListToolInvocationsByRun(userID uint, runID uint) ([]model.ToolInvocation, error) {
 	var invocations []model.ToolInvocation
 	err := database.DB.Model(&model.ToolInvocation{}).

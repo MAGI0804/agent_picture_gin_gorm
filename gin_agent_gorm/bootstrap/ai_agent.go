@@ -18,6 +18,7 @@ func setupAIAgent() {
 	ensureAIAgentIndexes()
 }
 
+// aiAgentAutoMigrateModels 返回 AI Agent 相关需要自动迁移的数据模型列表。
 func aiAgentAutoMigrateModels() []interface{} {
 	return []interface{}{
 		&model.User{},
@@ -41,6 +42,7 @@ func aiAgentAutoMigrateModels() []interface{} {
 	}
 }
 
+// ensureAIAgentIndexes 确保 AI Agent 相关的数据库索引存在。
 func ensureAIAgentIndexes() {
 	indexes := []struct {
 		value interface{}

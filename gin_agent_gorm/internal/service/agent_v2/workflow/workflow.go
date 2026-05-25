@@ -24,7 +24,7 @@ func Sequential(name string, version string, nodes ...domain.AgentNode) Workflow
 	}
 }
 
-// DAG creates a workflow with explicit node dependencies.
+// DAG 创建具有显式节点依赖关系的工作流。
 func DAG(
 	name string,
 	version string,
@@ -42,7 +42,7 @@ func DAG(
 	}
 }
 
-// OrderedNodes returns a deterministic topological execution order.
+// OrderedNodes 返回确定的拓扑执行顺序。
 func (flow Workflow) OrderedNodes() ([]domain.AgentNode, error) {
 	nodesByKey := make(map[string]domain.AgentNode, len(flow.Nodes))
 	nodeOrder := make(map[string]int, len(flow.Nodes))

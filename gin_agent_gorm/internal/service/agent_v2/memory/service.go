@@ -12,15 +12,15 @@ const (
 	NamespaceUserProfile     = "user_profile"
 	NamespaceVisualStyle     = "visual_style"
 	NamespaceArtifactLineage = "artifact_lineage"
-	NamespaceToolExperience  = "tool_experience"
-	NamespaceReflection      = "reflection"
+	NamespaceToolExperience = "tool_experience"
+	NamespaceReflection       = "reflection"
 
 	EventTypeCreated = "created"
 	EventTypeDeleted = "deleted"
 	EventTypeUsed    = "used"
 )
 
-// Repository defines the persistence operations required by Memory Service.
+// Repository 定义记忆服务所需的持久化操作接口。
 type Repository interface {
 	CreateMemory(memory *model.ContextMemory) error
 	ListMemories(filter agent_v2_dao.MemoryFilter) ([]model.ContextMemory, error)
@@ -29,12 +29,12 @@ type Repository interface {
 	CreateMemoryEvent(event *model.MemoryEvent) error
 }
 
-// Service owns V2 memory reads, writes, and audit events.
+// Service 负责 V2 记忆的读取、写入和审计事件。
 type Service struct {
 	repo Repository
 }
 
-// SearchRequest describes a scoped memory retrieval.
+// SearchRequest 描述范围限定的记忆检索请求。
 type SearchRequest struct {
 	UserID         uint
 	ConversationID uint
@@ -44,7 +44,7 @@ type SearchRequest struct {
 	MarkUsed       bool
 }
 
-// WriteRequest describes one memory write.
+// WriteRequest 描述一次记忆写入操作。
 type WriteRequest struct {
 	UserID         uint
 	ConversationID uint
@@ -59,12 +59,12 @@ type WriteRequest struct {
 	ArtifactID     uint
 }
 
-// NewService creates a Memory Service.
+// NewService 创建记忆服务实例。
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
 }
 
-// Search returns scoped memories and optionally records usage.
+// Search 返回范围限定的记忆并可选记录使用情况。
 func (svc *Service) Search(request SearchRequest) ([]model.ContextMemory, error) {
 	if request.UserID == 0 {
 		return nil, errors.New("memory search user_id is required")
@@ -91,7 +91,7 @@ func (svc *Service) Search(request SearchRequest) ([]model.ContextMemory, error)
 	return memories, nil
 }
 
-// Write creates a memory and records an audit event.
+// Write 创建一条记忆并记录审计事件。
 func (svc *Service) Write(request WriteRequest) (model.ContextMemory, error) {
 	if request.UserID == 0 {
 		return model.ContextMemory{}, errors.New("memory user_id is required")
@@ -139,7 +139,7 @@ func (svc *Service) Write(request WriteRequest) (model.ContextMemory, error) {
 	return memory, nil
 }
 
-// Delete soft-deletes a memory and records an audit event.
+// Delete 软删除一条记忆并记录审计事件。
 func (svc *Service) Delete(userID uint, memoryID uint) error {
 	if userID == 0 {
 		return errors.New("memory delete user_id is required")

@@ -2,7 +2,7 @@ package model
 
 import "gorm.io/gorm"
 
-// MemoryEvent records writes, updates, deletes, and usage updates for V2 memories.
+// MemoryEvent 记录 V2 记忆的写入、更新、删除和使用更新事件。
 type MemoryEvent struct {
 	BaseModel
 	MemoryID       uint   `gorm:"column:memory_id;index;not null;default:0" json:"memory_id"`
@@ -18,18 +18,18 @@ type MemoryEvent struct {
 	CommonTimestampsField
 }
 
-// TableName returns the memory event table name.
+// TableName 返回记忆事件表名。
 func (MemoryEvent) TableName() string {
 	return "memory_events"
 }
 
-// BeforeCreate writes timestamps before inserting a memory event.
+// BeforeCreate 写入记忆事件前写入时间戳。
 func (m *MemoryEvent) BeforeCreate(tx *gorm.DB) error {
 	setCreateTimestamps(&m.CommonTimestampsField)
 	return nil
 }
 
-// BeforeUpdate refreshes timestamps before updating a memory event.
+// BeforeUpdate 更新记忆事件前刷新时间戳。
 func (m *MemoryEvent) BeforeUpdate(tx *gorm.DB) error {
 	setUpdateTimestamp(&m.CommonTimestampsField)
 	return nil

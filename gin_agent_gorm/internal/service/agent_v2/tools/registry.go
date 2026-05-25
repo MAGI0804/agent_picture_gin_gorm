@@ -16,7 +16,7 @@ const (
 	KindSafety          = "safety"
 )
 
-// Capability describes a tool's limits and supported features.
+// Capability 描述工具的限制和支持的功能。
 type Capability struct {
 	MaxPromptChars     int
 	SupportedRatios    []string
@@ -26,7 +26,7 @@ type Capability struct {
 	CostPolicy         string
 }
 
-// Tool is a registered model/provider capability.
+// Tool 是一个已注册的模型/提供商能力。
 type Tool struct {
 	Name                    string
 	Kind                    string
@@ -43,24 +43,24 @@ type Tool struct {
 	SafetyProvider          SafetyProvider
 }
 
-// FindToolRequest describes a capability lookup.
+// FindToolRequest 描述一个能力查找请求。
 type FindToolRequest struct {
 	Kind          string
 	UserID        uint
 	ModelConfigID uint
 }
 
-// Registry stores available V2 tools by capability.
+// Registry 按能力存储可用的 V2 工具。
 type Registry struct {
 	tools []Tool
 }
 
-// NewRegistry creates an empty registry.
+// NewRegistry 创建一个空的注册表。
 func NewRegistry() *Registry {
 	return &Registry{tools: []Tool{}}
 }
 
-// Register adds a tool after validating it has the provider required by its kind.
+// Register 在验证工具具有其类型所需的提供商后添加工具。
 func (registry *Registry) Register(tool Tool) error {
 	if tool.Name == "" {
 		return errors.New("tool name is required")
@@ -75,7 +75,7 @@ func (registry *Registry) Register(tool Tool) error {
 	return nil
 }
 
-// FindTool returns the first tool matching kind and optional model config.
+// FindTool 返回匹配类型和可选模型配置的第一个工具。
 func (registry *Registry) FindTool(request FindToolRequest) (Tool, error) {
 	if request.Kind == "" {
 		return Tool{}, errors.New("tool kind is required")
@@ -113,37 +113,37 @@ func (tool Tool) hasProviderForKind() bool {
 	}
 }
 
-// TextProvider is the V2 text generation provider boundary.
+// TextProvider 是 V2 文本生成提供商接口。
 type TextProvider interface {
 	GenerateText(ctx context.Context, request TextRequest) (TextResult, error)
 }
 
-// ImageGenerationProvider is the V2 text-to-image provider boundary.
+// ImageGenerationProvider 是 V2 文本到图像提供商接口。
 type ImageGenerationProvider interface {
 	GenerateImage(ctx context.Context, request ImageGenerationRequest) (ImageGenerationResult, error)
 }
 
-// ImageEditProvider is the V2 image editing provider boundary.
+// ImageEditProvider 是 V2 图像编辑提供商接口。
 type ImageEditProvider interface {
 	EditImage(ctx context.Context, request ImageEditRequest) (ImageEditResult, error)
 }
 
-// VisionProvider is the V2 visual understanding provider boundary.
+// VisionProvider 是 V2 视觉理解提供商接口。
 type VisionProvider interface {
 	AnalyzeImage(ctx context.Context, request VisionRequest) (VisionResult, error)
 }
 
-// OCRProvider is the V2 OCR provider boundary.
+// OCRProvider 是 V2 OCR 提供商接口。
 type OCRProvider interface {
 	ExtractText(ctx context.Context, request OCRRequest) (OCRResult, error)
 }
 
-// SegmentationProvider is the V2 segmentation provider boundary.
+// SegmentationProvider 是 V2 分割提供商接口。
 type SegmentationProvider interface {
 	SegmentImage(ctx context.Context, request SegmentationRequest) (SegmentationResult, error)
 }
 
-// SafetyProvider is the V2 content safety provider boundary.
+// SafetyProvider 是 V2 内容安全提供商接口。
 type SafetyProvider interface {
 	CheckContent(ctx context.Context, request SafetyRequest) (SafetyResult, error)
 }

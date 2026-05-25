@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// MemoryFilter describes the permission and namespace filters for V2 memory queries.
+// MemoryFilter 描述 V2 记忆查询的权限和命名空间筛选条件。
 type MemoryFilter struct {
 	UserID         uint
 	ConversationID uint
@@ -47,7 +47,7 @@ func (dao *AgentV2DAO) ListMemories(filter MemoryFilter) ([]model.ContextMemory,
 	return memories, err
 }
 
-// UpdateMemoryUsage records that a memory was used by a workflow.
+// UpdateMemoryUsage 记录某条记忆被工作流使用。
 func (dao *AgentV2DAO) UpdateMemoryUsage(memoryID uint) error {
 	return database.DB.Model(&model.ContextMemory{}).
 		Where("id = ? AND deleted_at = ?", memoryID, 0).
@@ -57,14 +57,14 @@ func (dao *AgentV2DAO) UpdateMemoryUsage(memoryID uint) error {
 		}).Error
 }
 
-// SoftDeleteMemory marks a memory as deleted while preserving auditability.
+// SoftDeleteMemory 将标记记为已删除，同时保留可审计性。
 func (dao *AgentV2DAO) SoftDeleteMemory(userID uint, memoryID uint) error {
 	return database.DB.Model(&model.ContextMemory{}).
 		Where("user_id = ? AND id = ? AND deleted_at = ?", userID, memoryID, 0).
 		Update("deleted_at", int(time.Now().Unix())).Error
 }
 
-// CreateMemoryEvent records a memory audit event.
+// CreateMemoryEvent 记录一条记忆审计事件。
 func (dao *AgentV2DAO) CreateMemoryEvent(event *model.MemoryEvent) error {
 	return database.DB.Create(event).Error
 }

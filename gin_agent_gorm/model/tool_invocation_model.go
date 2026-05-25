@@ -2,7 +2,7 @@ package model
 
 import "gorm.io/gorm"
 
-// ToolInvocation records every provider/tool call made through the V2 Tool Registry.
+// ToolInvocation 记录通过 V2 工具注册表进行的每次提供商/工具调用。
 type ToolInvocation struct {
 	BaseModel
 	AgentRunID   uint   `gorm:"column:agent_run_id;index;not null" json:"agent_run_id"`
@@ -24,18 +24,18 @@ type ToolInvocation struct {
 	CommonTimestampsField
 }
 
-// TableName returns the tool invocation table name.
+// TableName 返回工具调用表名。
 func (ToolInvocation) TableName() string {
 	return "tool_invocations"
 }
 
-// BeforeCreate writes timestamps before inserting a tool invocation.
+// BeforeCreate 写入工具调用前写入时间戳。
 func (m *ToolInvocation) BeforeCreate(tx *gorm.DB) error {
 	setCreateTimestamps(&m.CommonTimestampsField)
 	return nil
 }
 
-// BeforeUpdate refreshes timestamps before updating a tool invocation.
+// BeforeUpdate 更新工具调用前刷新时间戳。
 func (m *ToolInvocation) BeforeUpdate(tx *gorm.DB) error {
 	setUpdateTimestamp(&m.CommonTimestampsField)
 	return nil

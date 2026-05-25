@@ -6,7 +6,7 @@ import (
 	"gin-biz-web-api/model"
 )
 
-// Repository defines the persistence operations required by Artifact Service.
+// Repository 定义产物服务所需的持久化操作接口。
 type Repository interface {
 	CreateArtifact(artifact *model.Artifact) error
 	FindArtifact(userID uint, artifactID uint) (model.Artifact, error)
@@ -16,23 +16,23 @@ type Repository interface {
 	CreateArtifactFeedback(feedback *model.ArtifactFeedback) error
 }
 
-// Service owns all V2 artifact access and version creation.
+// Service 负责所有 V2 产物的访问和版本创建。
 type Service struct {
 	repo Repository
 }
 
-// CreateArtifactWithVersionInput contains one logical artifact and its first version.
+// CreateArtifactWithVersionInput 包含一个逻辑产物及其第一个版本。
 type CreateArtifactWithVersionInput struct {
 	Artifact model.Artifact
 	Version  model.ArtifactVersion
 }
 
-// NewService creates an Artifact Service.
+// NewService 创建产物服务实例。
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
 }
 
-// CreateArtifactWithVersion creates an artifact and at least one version in order.
+// CreateArtifactWithVersion 创建一个产物和至少一个版本。
 func (svc *Service) CreateArtifactWithVersion(
 	input CreateArtifactWithVersionInput,
 ) (model.Artifact, model.ArtifactVersion, error) {
@@ -68,22 +68,22 @@ func (svc *Service) CreateArtifactWithVersion(
 	return artifact, version, nil
 }
 
-// ListArtifacts lists artifacts after user and conversation scoping.
+// ListArtifacts 列出用户和会话范围内的产物。
 func (svc *Service) ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error) {
 	return svc.repo.ListArtifacts(userID, conversationID)
 }
 
-// ListVersions lists versions after artifact ownership validation in the repository.
+// ListVersions 在仓库层验证所有权后列出版本。
 func (svc *Service) ListVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error) {
 	return svc.repo.ListArtifactVersions(userID, artifactID)
 }
 
-// AuthorizeDownload resolves a downloadable artifact through ownership validation.
+// AuthorizeDownload 通过所有权验证解析可下载的产物。
 func (svc *Service) AuthorizeDownload(userID uint, artifactID uint) (model.Artifact, error) {
 	return svc.repo.FindArtifact(userID, artifactID)
 }
 
-// RecordFeedback writes user feedback for an artifact or artifact version.
+// RecordFeedback 写入用户对产物或产物版本的反馈。
 func (svc *Service) RecordFeedback(feedback model.ArtifactFeedback) error {
 	if feedback.UserID == 0 {
 		return errors.New("feedback user_id is required")
