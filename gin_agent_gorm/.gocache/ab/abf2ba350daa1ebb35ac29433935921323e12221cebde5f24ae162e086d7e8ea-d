@@ -1,5 +1,0 @@
-./rules_cn_length.go
-./rules_exists.go
-./rules_required_all_db.go
-./validate.go
-./validators_custom.go

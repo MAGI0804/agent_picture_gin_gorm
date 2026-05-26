@@ -1,6 +1,0 @@
-./agent_routes.go
-./agent_v2_routes.go
-./api.go
-./auth_routes.go
-./example_routes.go
-./test_routes.go

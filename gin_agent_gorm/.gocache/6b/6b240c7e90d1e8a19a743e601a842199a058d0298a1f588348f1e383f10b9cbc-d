@@ -1,5 +1,0 @@
-./image_generation.go
-./mock.go
-./vision_review.go
-./image_generation_test.go
-./vision_review_test.go

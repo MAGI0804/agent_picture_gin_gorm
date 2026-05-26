@@ -266,6 +266,7 @@ npm run build
 | 2026-05-26 | feedback/review memory proposal 闭环 | 新增 `MemoryService.ProposeFromArtifactFeedback` 和 `ProposeFromReview`；artifact 选择、显式反馈、低分/需 refine 的 review 会写入 `context_memories`，用 `kind=memory_proposal` 保持候选状态，并在 `memory_events` 记录来源 | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app -count=1` 通过 |
 | 2026-05-26 | 异步 Run 后端第一版 | 新增 `CreateRunAsync`、`POST /api/v2/conversations/:id/runs/async`；接口只创建 message/run、标记 `queued` 并立即返回，后台 goroutine 继续执行现有 workflow，完成后仍写 step、artifact、review、assistant message | `go test ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers -count=1` 通过 |
 | 2026-05-26 | memory proposal 去重、晋级和 Prompt 带入 | 新增同 scope proposal 合并、`PromoteProposal`、`POST /api/v2/memories/:id/promote`；CreateRun 会检索高置信稳定 `visual_style/user_profile` 记忆并带入 Prompt Agent，proposal 草稿不会直接影响 prompt | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers ./internal/dao/agent_v2_dao -count=1` 通过 |
+| 2026-05-26 | Git 缓存清理 | 将误跟踪的 `.gocache/` 从 Git 索引移除，并新增 `.gitignore` 忽略规则，后续 Go 测试缓存只保留在本地工作区 | `git rm -r --cached .gocache` 已执行；本地缓存文件未删除 |
 
 ## 9. Google 模型数据库配置
 
