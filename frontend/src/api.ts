@@ -104,6 +104,27 @@ export async function downloadArtifact(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
+export async function downloadV2Artifact(id: number, name: string) {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) {
+    headers.set('token', token)
+  }
+  const response = await fetch(`/api/v2/artifacts/${id}/download`, { headers })
+  if (!response.ok) {
+    throw new Error('下载失败')
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
 export interface OptimizePromptResult {
   original_prompt: string
   optimized_prompt: string

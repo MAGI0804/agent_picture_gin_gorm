@@ -4,13 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 
 	"gin-biz-web-api/internal/dao/agent_v2_dao"
+	"gin-biz-web-api/internal/service/agent_svc"
 	artifactsvc "gin-biz-web-api/internal/service/agent_v2/artifact"
 	"gin-biz-web-api/internal/service/agent_v2/domain"
 	memorysvc "gin-biz-web-api/internal/service/agent_v2/memory"
 	"gin-biz-web-api/internal/service/agent_v2/runtime"
+	"gin-biz-web-api/internal/service/agent_v2/tools"
 	"gin-biz-web-api/internal/service/agent_v2/workflow"
 	"gin-biz-web-api/model"
 
@@ -29,9 +32,12 @@ type Service struct {
 
 // CreateRunRequest 是创建 Agent Run 的请求体。
 type CreateRunRequest struct {
-	Content        string `json:"content" form:"content" binding:"required"`
-	TaskType       string `json:"task_type" form:"task_type"`
-	IdempotencyKey string `json:"idempotency_key" form:"idempotency_key"`
+	Content            string `json:"content" form:"content" binding:"required"`
+	TaskType           string `json:"task_type" form:"task_type"`
+	IdempotencyKey     string `json:"idempotency_key" form:"idempotency_key"`
+	TextModelConfigID  uint   `json:"text_model_config_id" form:"text_model_config_id"`
+	ImageModelConfigID uint   `json:"image_model_config_id" form:"image_model_config_id"`
+	CandidateCount     int    `json:"candidate_count" form:"candidate_count"`
 }
 
 // MemorySearchRequest 是 V2 记忆查询请求。
@@ -46,6 +52,14 @@ type MemorySearchRequest struct {
 // SelectArtifactRequest 是选择候选产物请求。
 type SelectArtifactRequest struct {
 	ArtifactVersionID uint `json:"artifact_version_id" form:"artifact_version_id"`
+}
+
+// ArtifactFeedbackRequest records explicit user feedback for a V2 artifact.
+type ArtifactFeedbackRequest struct {
+	ArtifactVersionID uint   `json:"artifact_version_id" form:"artifact_version_id"`
+	FeedbackType      string `json:"feedback_type" form:"feedback_type" binding:"required"`
+	Rating            int    `json:"rating" form:"rating"`
+	Comment           string `json:"comment" form:"comment"`
 }
 
 // NewService 创建应用服务，并手动装配 DAO 与运行时执行器。
@@ -91,6 +105,45 @@ func (svc *Service) CreateRun(
 		}
 	}
 
+	imageConfig, err := svc.resolveRuntimeModelConfig(userID, "image", request.ImageModelConfigID)
+	if err != nil {
+		return nil, err
+	}
+	textConfig, textConfigErr := svc.resolveRuntimeModelConfig(userID, "text", request.TextModelConfigID)
+
+	registry := tools.NewRegistry()
+	imageAdapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
+	if err := registry.Register(tools.Tool{
+		Name:          runtimeImageModelName(imageConfig.Config),
+		Kind:          tools.KindImageGeneration,
+		Provider:      imageConfig.Config.Provider,
+		Model:         runtimeImageModelName(imageConfig.Config),
+		ModelConfigID: imageConfig.GlobalID,
+		Capability: tools.Capability{
+			SupportedRatios: []string{"1:1", "4:3", "16:9", "9:16"},
+			MaxCandidates:   3,
+			CostPolicy:      "real_provider",
+		},
+		ImageGenerationProvider: imageAdapter,
+	}); err != nil {
+		return nil, err
+	}
+	if textConfigErr == nil {
+		textAdapter := tools.NewLegacyProviderAdapter(textConfig.Config)
+		_ = registry.Register(tools.Tool{
+			Name:          runtimeTextModelName(textConfig.Config),
+			Kind:          tools.KindText,
+			Provider:      textConfig.Config.Provider,
+			Model:         runtimeTextModelName(textConfig.Config),
+			ModelConfigID: textConfig.GlobalID,
+			Capability: tools.Capability{
+				MaxPromptChars: 8000,
+				CostPolicy:     "real_provider",
+			},
+			TextProvider: textAdapter,
+		})
+	}
+
 	// 第二步：保存触发本次 Agent Run 的用户消息。
 	message := model.Message{
 		ConversationID: conversation.ID,
@@ -111,11 +164,15 @@ func (svc *Service) CreateRun(
 		UserRequest:    request.Content,
 		Budget: domain.RunBudget{
 			MaxSteps:            12,
-			MaxImageGenerations: 1,
+			MaxImageGenerations: normalizeCandidateCount(request.CandidateCount),
 			TimeoutSeconds:      180,
 		},
 		Metadata: map[string]string{
-			"runtime": "agent_v2_first_day",
+			"runtime":               "agent_v2_real_image_generation",
+			"image_model_config_id": uintToString(imageConfig.GlobalID),
+			"text_model_config_id":  uintToString(textConfig.GlobalID),
+			"image_model_provider":  imageConfig.Config.Provider,
+			"image_model_name":      runtimeImageModelName(imageConfig.Config),
 		},
 	}
 
@@ -127,19 +184,30 @@ func (svc *Service) CreateRun(
 		Status:           domain.RunStatusCreated,
 		TaskType:         state.TaskType,
 		WorkflowName:     "image_generation_v2",
-		WorkflowVersion:  "0.1.0",
+		WorkflowVersion:  "0.2.0",
 		StateJSON:        mustJSON(state),
 		BudgetJSON:       mustJSON(state.Budget),
 		IdempotencyKey:   idempotencyKey,
+		ImageModelName:   runtimeImageModelName(imageConfig.Config),
+	}
+	if textConfigErr == nil {
+		run.TextModelName = runtimeTextModelName(textConfig.Config)
 	}
 	if err := svc.dao.CreateRun(&run); err != nil {
 		return nil, err
 	}
 	_ = svc.dao.UpdateMessageAgentRunID(message.ID, run.ID)
 
-	// 第五步：执行固定 mock workflow，验证 runtime/step/timeline 的基础链路。
+	// 第五步：执行固定真实图片 workflow，调用 V2 tool registry 并写入 artifact/version。
 	state.RunID = run.ID
-	flow := workflow.MockImageGenerationWorkflow()
+	flow := workflow.ImageGenerationWorkflow(workflow.ImageGenerationWorkflowOptions{
+		Registry:           registry,
+		ArtifactWriter:     svc.artifacts,
+		ImageModelConfigID: imageConfig.GlobalID,
+		CandidateCount:     normalizeCandidateCount(request.CandidateCount),
+		ModelProvider:      imageConfig.Config.Provider,
+		ModelName:          runtimeImageModelName(imageConfig.Config),
+	})
 	finalState, err := svc.executor.Execute(ctx, state, flow)
 	if err != nil {
 		steps, _ := svc.dao.ListSteps(userID, run.ID)
@@ -150,19 +218,37 @@ func (svc *Service) CreateRun(
 		}, err
 	}
 
+	assistantMessage := model.Message{
+		ConversationID: conversation.ID,
+		UserID:         userID,
+		Role:           "assistant",
+		InputType:      "agent_result",
+		Content:        "Agent V2 已完成图片生成，并写入产物版本。",
+		AgentRunID:     run.ID,
+	}
+	if err := svc.dao.CreateMessage(&assistantMessage); err != nil {
+		return nil, err
+	}
+
 	// 第六步：重新读取 run 和 steps，返回给前端作为第一版 timeline。
 	run, _ = svc.dao.FindRun(userID, run.ID)
 	steps, err := svc.dao.ListSteps(userID, run.ID)
 	if err != nil {
 		return nil, err
 	}
+	artifacts, err := svc.artifacts.ListArtifacts(userID, conversation.ID)
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string]interface{}{
-		"conversation": conversation,
-		"user_message": message,
-		"agent_run":    run,
-		"steps":        steps,
-		"state":        finalState,
+		"conversation":      conversation,
+		"user_message":      message,
+		"assistant_message": assistantMessage,
+		"agent_run":         run,
+		"steps":             steps,
+		"artifacts":         artifacts,
+		"state":             finalState,
 	}, nil
 }
 
@@ -223,6 +309,47 @@ func (svc *Service) SelectArtifact(userID uint, artifactID uint, request SelectA
 	})
 }
 
+// ListArtifacts returns V2 artifacts for a conversation after ownership validation.
+func (svc *Service) ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error) {
+	if _, err := svc.dao.FindConversation(userID, conversationID); err != nil {
+		return nil, err
+	}
+	return svc.artifacts.ListArtifacts(userID, conversationID)
+}
+
+// ListArtifactVersions returns all versions of an artifact owned by the user.
+func (svc *Service) ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error) {
+	return svc.artifacts.ListVersions(userID, artifactID)
+}
+
+// DownloadArtifact resolves an owned artifact to a local file path.
+func (svc *Service) DownloadArtifact(userID uint, artifactID uint) (model.Artifact, string, error) {
+	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
+	if err != nil {
+		return artifact, "", err
+	}
+	return artifact, agent_svc.NewObjectStore().Path(artifact.ObjectKey), nil
+}
+
+// RecordArtifactFeedback writes feedback after validating artifact ownership.
+func (svc *Service) RecordArtifactFeedback(
+	userID uint,
+	artifactID uint,
+	request ArtifactFeedbackRequest,
+) error {
+	if _, err := svc.artifacts.AuthorizeDownload(userID, artifactID); err != nil {
+		return err
+	}
+	return svc.artifacts.RecordFeedback(model.ArtifactFeedback{
+		ArtifactID:        artifactID,
+		ArtifactVersionID: request.ArtifactVersionID,
+		UserID:            userID,
+		FeedbackType:      strings.TrimSpace(request.FeedbackType),
+		Rating:            request.Rating,
+		Comment:           strings.TrimSpace(request.Comment),
+	})
+}
+
 // coalesce 在请求未指定值时返回默认值。
 func coalesce(value string, fallback string) string {
 	if value == "" {
@@ -237,6 +364,23 @@ func normalizeIdempotencyKey(value string) string {
 		return value
 	}
 	return value[:maxIdempotencyKeyLength]
+}
+
+func normalizeCandidateCount(value int) int {
+	if value <= 0 {
+		return 1
+	}
+	if value > 3 {
+		return 3
+	}
+	return value
+}
+
+func uintToString(value uint) string {
+	if value == 0 {
+		return ""
+	}
+	return strconv.FormatUint(uint64(value), 10)
 }
 
 // mustJSON 将对象序列化为 JSON，序列化失败时返回空对象字符串。

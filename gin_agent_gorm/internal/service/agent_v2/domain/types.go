@@ -23,19 +23,20 @@ const (
 
 // RunState 运行状态，包含一次 Agent 运行的完整上下文
 type RunState struct {
-	RunID          uint              `json:"run_id"`
-	UserID         uint              `json:"user_id"`
-	ConversationID uint              `json:"conversation_id"`
-	TaskType       string            `json:"task_type"`
-	Intent         string            `json:"intent"`
-	UserRequest    string            `json:"user_request"`
-	Requirements   ImageRequirements `json:"requirements"`
-	MemoryContext  []MemoryItem      `json:"memory_context"`
-	Prompts        PromptBundle      `json:"prompts"`
-	Artifacts      []ArtifactRef     `json:"artifacts"`
-	Review         ReviewResult      `json:"review"`
-	Budget         RunBudget         `json:"budget"`
-	Metadata       map[string]string `json:"metadata"`
+	RunID           uint                `json:"run_id"`
+	UserID          uint                `json:"user_id"`
+	ConversationID  uint                `json:"conversation_id"`
+	TaskType        string              `json:"task_type"`
+	Intent          string              `json:"intent"`
+	UserRequest     string              `json:"user_request"`
+	Requirements    ImageRequirements   `json:"requirements"`
+	MemoryContext   []MemoryItem        `json:"memory_context"`
+	Prompts         PromptBundle        `json:"prompts"`
+	GeneratedImages []GeneratedImageRef `json:"generated_images"`
+	Artifacts       []ArtifactRef       `json:"artifacts"`
+	Review          ReviewResult        `json:"review"`
+	Budget          RunBudget           `json:"budget"`
+	Metadata        map[string]string   `json:"metadata"`
 }
 
 // ImageRequirements 图片需求配置
@@ -63,6 +64,17 @@ type PromptBundle struct {
 	NegativePrompt       string            `json:"negative_prompt"`
 	RenderTextSeparately bool              `json:"render_text_separately"`
 	Params               map[string]string `json:"params"`
+}
+
+// GeneratedImageRef is the structured handoff from Image Agent to Artifact Agent.
+type GeneratedImageRef struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	MimeType   string `json:"mime_type"`
+	ObjectKey  string `json:"object_key"`
+	PreviewURL string `json:"preview_url"`
+	SizeBytes  int64  `json:"size_bytes"`
+	Hash       string `json:"hash"`
 }
 
 // ArtifactRef 产物引用

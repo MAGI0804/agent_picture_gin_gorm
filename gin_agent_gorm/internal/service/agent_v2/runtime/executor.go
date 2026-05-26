@@ -157,11 +157,36 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 			state.Intent = intent
 		}
 	case "requirement_agent":
-		state.Requirements.NeedClarification = false
+		if subject, ok := result.Output["subject"].(string); ok {
+			state.Requirements.Subject = subject
+		}
+		if style, ok := result.Output["style"].(string); ok {
+			state.Requirements.Style = style
+		}
+		if aspectRatio, ok := result.Output["aspect_ratio"].(string); ok {
+			state.Requirements.AspectRatio = aspectRatio
+		}
+		state.Requirements.MustInclude = parseIssueList(result.Output["must_include"])
+		state.Requirements.MustAvoid = parseIssueList(result.Output["must_avoid"])
+		if needClarification, ok := result.Output["need_clarification"].(bool); ok {
+			state.Requirements.NeedClarification = needClarification
+		}
+		state.Requirements.Questions = parseIssueList(result.Output["questions"])
 	case "prompt_agent":
 		if prompt, ok := result.Output["positive_prompt"].(string); ok {
 			state.Prompts.PositivePrompt = prompt
 		}
+		if prompt, ok := result.Output["negative_prompt"].(string); ok {
+			state.Prompts.NegativePrompt = prompt
+		}
+		if renderTextSeparately, ok := result.Output["render_text_separately"].(bool); ok {
+			state.Prompts.RenderTextSeparately = renderTextSeparately
+		}
+		state.Prompts.Params = parseStringMap(result.Output["params"])
+	case "image_generation_agent":
+		state.GeneratedImages = parseGeneratedImages(result.Output["generated_images"])
+	case "artifact_agent":
+		state.Artifacts = append(state.Artifacts, result.Artifacts...)
 	case "vision_review_agent":
 		if score, ok := result.Output["overall_score"].(float64); ok {
 			state.Review.OverallScore = score
@@ -172,6 +197,72 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		}
 	}
 	return state
+}
+
+func parseStringMap(value interface{}) map[string]string {
+	switch params := value.(type) {
+	case map[string]string:
+		return params
+	case map[string]interface{}:
+		result := make(map[string]string, len(params))
+		for key, value := range params {
+			if text, ok := value.(string); ok {
+				result[key] = text
+			}
+		}
+		return result
+	default:
+		return map[string]string{}
+	}
+}
+
+func parseGeneratedImages(value interface{}) []domain.GeneratedImageRef {
+	switch images := value.(type) {
+	case []domain.GeneratedImageRef:
+		return images
+	case []interface{}:
+		result := make([]domain.GeneratedImageRef, 0, len(images))
+		for _, image := range images {
+			if item, ok := image.(domain.GeneratedImageRef); ok {
+				result = append(result, item)
+				continue
+			}
+			if item, ok := image.(map[string]interface{}); ok {
+				result = append(result, domain.GeneratedImageRef{
+					Name:       stringValue(item["name"]),
+					Kind:       stringValue(item["kind"]),
+					MimeType:   stringValue(item["mime_type"]),
+					ObjectKey:  stringValue(item["object_key"]),
+					PreviewURL: stringValue(item["preview_url"]),
+					SizeBytes:  int64Value(item["size_bytes"]),
+					Hash:       stringValue(item["hash"]),
+				})
+			}
+		}
+		return result
+	default:
+		return []domain.GeneratedImageRef{}
+	}
+}
+
+func stringValue(value interface{}) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func int64Value(value interface{}) int64 {
+	switch number := value.(type) {
+	case int64:
+		return number
+	case int:
+		return int64(number)
+	case float64:
+		return int64(number)
+	default:
+		return 0
+	}
 }
 
 func parseIssueList(value interface{}) []string {

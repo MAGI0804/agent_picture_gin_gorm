@@ -1,6 +1,19 @@
 package workflow
 
-import "gin-biz-web-api/internal/service/agent_v2/agents"
+import (
+	"gin-biz-web-api/internal/service/agent_v2/agents"
+	"gin-biz-web-api/internal/service/agent_v2/tools"
+)
+
+// ImageGenerationWorkflowOptions wires the first real text-to-image workflow.
+type ImageGenerationWorkflowOptions struct {
+	Registry           *tools.Registry
+	ArtifactWriter     agents.ArtifactWriter
+	ImageModelConfigID uint
+	CandidateCount     int
+	ModelProvider      string
+	ModelName          string
+}
 
 // MockImageGenerationWorkflow 创建一个模拟的图片生成工作流
 func MockImageGenerationWorkflow() Workflow {
@@ -19,6 +32,26 @@ func MockImageGenerationWorkflow() Workflow {
 		}),
 		agents.NewMockAgent("prompt_agent", "prepared placeholder prompt bundle", map[string]interface{}{
 			"positive_prompt": "mock prompt for first-day v2 runtime skeleton",
+		}),
+	)
+}
+
+// ImageGenerationWorkflow creates the first real V2 image generation workflow.
+func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
+	return Sequential(
+		"image_generation_v2",
+		"0.2.0",
+		agents.NewIntentRouterAgent(),
+		agents.NewRequirementAgent(),
+		agents.NewMemoryAgent(),
+		agents.NewPromptAgent(),
+		agents.NewImageGenerationAgent(options.Registry, agents.ImageGenerationAgentOptions{
+			ImageModelConfigID: options.ImageModelConfigID,
+			CandidateCount:     options.CandidateCount,
+		}),
+		agents.NewArtifactAgent(options.ArtifactWriter, agents.ArtifactAgentOptions{
+			ModelProvider: options.ModelProvider,
+			ModelName:     options.ModelName,
 		}),
 	)
 }

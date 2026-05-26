@@ -149,18 +149,32 @@ type SafetyProvider interface {
 }
 
 type TextRequest struct {
-	Prompt string
+	System   string
+	Prompt   string
+	Messages []TextMessage
+}
+
+type TextMessage struct {
+	Role    string
+	Content string
 }
 
 type TextResult struct {
-	Text string
+	Text      string
+	Reasoning string
 }
 
 type ImageGenerationRequest struct {
+	UserID         uint
+	ConversationID uint
+	RunID          uint
+	TaskType       string
+	Intent         string
 	Prompt         string
 	NegativePrompt string
 	AspectRatio    string
 	CandidateCount int
+	Temperature    string
 }
 
 type ImageGenerationResult struct {
@@ -168,8 +182,12 @@ type ImageGenerationResult struct {
 }
 
 type GeneratedImage struct {
+	Name       string
+	Kind       string
+	MimeType   string
 	ObjectKey  string
 	PreviewURL string
+	SizeBytes  int64
 	Hash       string
 }
 

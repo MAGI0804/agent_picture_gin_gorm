@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"gin-biz-web-api/internal/service/agent_svc"
 	"gin-biz-web-api/internal/service/agent_v2/app"
 	"gin-biz-web-api/pkg/auth"
 	"gin-biz-web-api/pkg/errcode"
@@ -127,6 +128,71 @@ func (ctrl *AgentV2Controller) SelectArtifact(c *gin.Context) {
 		return
 	}
 	responses.New(c).ToResponse(gin.H{"selected": true})
+}
+
+// ListArtifacts 列出当前会话的 V2 产物。
+func (ctrl *AgentV2Controller) ListArtifacts(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	conversationID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	artifacts, err := app.NewService().ListArtifacts(userID, conversationID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "conversation not found")
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"artifacts": artifacts})
+}
+
+// ListArtifactVersions 列出当前用户有权访问的产物版本。
+func (ctrl *AgentV2Controller) ListArtifactVersions(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	versions, err := app.NewService().ListArtifactVersions(userID, artifactID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "artifact not found")
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"versions": versions})
+}
+
+// DownloadArtifact 下载当前用户有权访问的 V2 产物。
+func (ctrl *AgentV2Controller) DownloadArtifact(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	artifact, filePath, err := app.NewService().DownloadArtifact(userID, artifactID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "artifact not found")
+		return
+	}
+	c.Header("Content-Type", artifact.MimeType)
+	c.FileAttachment(filePath, agent_svc.SafeDownloadName(artifact.Name))
+}
+
+// RecordArtifactFeedback 写入当前用户对 V2 产物的反馈。
+func (ctrl *AgentV2Controller) RecordArtifactFeedback(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.ArtifactFeedbackRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	if err := app.NewService().RecordArtifactFeedback(userID, artifactID, request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"recorded": true})
 }
 
 // parseID 解析 URL 参数中的 ID

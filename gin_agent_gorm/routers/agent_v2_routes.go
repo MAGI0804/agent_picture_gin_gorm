@@ -14,11 +14,15 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 	group.Use(middleware.AuthJWT())
 	{
 		group.POST("/conversations/:id/runs", ctrl.CreateRun)
+		group.GET("/conversations/:id/artifacts", ctrl.ListArtifacts)
 		group.GET("/runs/:id", ctrl.GetRun)
 		group.GET("/runs/:id/events", ctrl.RunEvents)
 		group.GET("/memories", ctrl.SearchMemories)
 		group.POST("/memories/search", ctrl.SearchMemories)
 		group.DELETE("/memories/:id", ctrl.DeleteMemory)
+		group.GET("/artifacts/:id/versions", ctrl.ListArtifactVersions)
+		group.GET("/artifacts/:id/download", ctrl.DownloadArtifact)
+		group.POST("/artifacts/:id/feedback", ctrl.RecordArtifactFeedback)
 		group.POST("/artifacts/:id/select", ctrl.SelectArtifact)
 	}
 }

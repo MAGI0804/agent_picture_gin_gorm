@@ -23,6 +23,12 @@ const router = createRouter({
       meta: { requiresAuth: true }
     },
     {
+      path: '/workspace',
+      name: 'workspace-v2',
+      component: () => import('../views/AgentWorkspaceV2View.vue'),
+      meta: { requiresAuth: true }
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('../views/SettingsView.vue'),
@@ -30,7 +36,7 @@ const router = createRouter({
     },
     {
       path: '/',
-      redirect: '/chat'
+      redirect: '/workspace'
     }
   ]
 })
@@ -42,7 +48,7 @@ router.beforeEach((to, from, next) => {
   if (requiresAuth && !isLoggedIn) {
     next('/login')
   } else if (!requiresAuth && isLoggedIn && (to.path === '/login' || to.path === '/register')) {
-    next('/chat')
+    next('/workspace')
   } else {
     next()
   }

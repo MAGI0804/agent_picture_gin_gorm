@@ -28,6 +28,10 @@
             <span class="nav-icon icon-chat" aria-hidden="true"></span>
             对话
           </button>
+          <button type="button" @click="router.push('/workspace')">
+            <span class="nav-icon icon-artifact" aria-hidden="true"></span>
+            V2 工作台
+          </button>
           <button type="button" @click="router.push('/settings')">
             <span class="nav-icon icon-settings" aria-hidden="true"></span>
             设置

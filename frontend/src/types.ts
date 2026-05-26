@@ -65,6 +65,30 @@ export interface Artifact {
   preview_url: string
   size_bytes: number
   hash: string
+  artifact_group_id?: string
+  rank_score?: number
+  selected_at?: number
+}
+
+export interface ArtifactVersion {
+  id: number
+  artifact_id: number
+  parent_version_id: number
+  agent_run_id: number
+  version_no: number
+  operation: string
+  prompt: string
+  negative_prompt: string
+  model_provider: string
+  model_name: string
+  generation_params: string
+  source_refs: string
+  quality_scores: string
+  object_key: string
+  preview_url: string
+  hash: string
+  created_at: number
+  updated_at: number
 }
 
 export interface GlobalModelConfig {
@@ -111,6 +135,12 @@ export interface AgentStep {
   think_content: string
   reasoning_content: string
   error_message: string
+  step_key?: string
+  attempt?: number
+  duration_ms?: number
+  input_hash?: string
+  output_hash?: string
+  output_json?: string
 }
 
 export interface ModelConfig {
@@ -130,4 +160,15 @@ export interface ModelConfig {
   anthropic_default_haiku_model: string
   claude_code_subagent_model: string
   claude_code_max_output_tokens: string
+}
+
+export interface AgentV2RunResponse {
+  conversation: Conversation
+  user_message?: Message
+  assistant_message?: Message
+  agent_run: AgentRun
+  steps: AgentStep[]
+  artifacts?: Artifact[]
+  state?: Record<string, unknown>
+  idempotent?: boolean
 }
