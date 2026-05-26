@@ -2,7 +2,7 @@
 package errcode
 
 var (
-	Success              = NewError(0, "请求成功")
+	Success              = NewError(200, "请求成功")
 	Fail                 = NewError(1, "请求失败")
 	BadRequest           = NewError(100400, "请求异常")
 	Unauthorized         = NewError(100401, "无权操作")

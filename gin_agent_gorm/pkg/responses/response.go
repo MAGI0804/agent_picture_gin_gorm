@@ -24,6 +24,14 @@ type ResponseData struct {
 	Data interface{} `json:"data"` // 数据
 }
 
+type PageData struct {
+	List       interface{} `json:"list"`
+	Page       int         `json:"page"`
+	PageSize   int         `json:"page_size"`
+	Total      int         `json:"total"`
+	TotalPages int         `json:"total_pages"`
+}
+
 // New 实例化返回类
 func New(ctx *gin.Context) *Response {
 	return &Response{Ctx: ctx}
@@ -35,12 +43,19 @@ func (r *Response) ToResponse(data interface{}) {
 	response := ResponseData{
 		Code: code.Code(),
 		Msg:  code.Msg(),
-		Data: nil,
+		Data: normalizeData(data),
 	}
-	if data == nil {
-		response.Data = gin.H{}
-	} else {
-		response.Data = data
+
+	r.Ctx.JSON(http.StatusOK, response)
+}
+
+// ToResponseWithMsg 正确数据返回，并允许业务指定成功提示文案
+func (r *Response) ToResponseWithMsg(data interface{}, msg string) {
+	code := errcode.Success
+	response := ResponseData{
+		Code: code.Code(),
+		Msg:  msg,
+		Data: normalizeData(data),
 	}
 
 	r.Ctx.JSON(http.StatusOK, response)
@@ -48,10 +63,13 @@ func (r *Response) ToResponse(data interface{}) {
 
 // ToResponseWithPagination 返回分页数据
 func (r *Response) ToResponseWithPagination(result interface{}, pagination paginator.Pagination) {
-	r.ToResponse(gin.H{
-		"result":     result,
-		"pagination": pagination,
-	})
+	r.ToResponseWithMsg(PageData{
+		List:       normalizeList(result),
+		Page:       pagination.Page,
+		PageSize:   pagination.PerPage,
+		Total:      pagination.TotalCount,
+		TotalPages: pagination.TotalPage,
+	}, "查询成功")
 }
 
 // ToErrorResponse 错误返回
@@ -114,4 +132,20 @@ func (r *Response) ToErrorValidateResponse(err *errcode.Error, errors map[string
 // isShowDetails 本地环境或者开发环境且开启了 debug 模式，则在返回结果中显示错误详情信息
 func (r *Response) isShowDetails() bool {
 	return app.IsDebug() && (app.IsLocal() || app.IsDev())
+}
+
+func normalizeData(data interface{}) interface{} {
+	if data == nil {
+		return gin.H{}
+	}
+
+	return data
+}
+
+func normalizeList(list interface{}) interface{} {
+	if list == nil {
+		return []interface{}{}
+	}
+
+	return list
 }

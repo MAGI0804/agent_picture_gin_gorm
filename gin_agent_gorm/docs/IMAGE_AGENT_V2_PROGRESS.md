@@ -267,6 +267,7 @@ npm run build
 | 2026-05-26 | 异步 Run 后端第一版 | 新增 `CreateRunAsync`、`POST /api/v2/conversations/:id/runs/async`；接口只创建 message/run、标记 `queued` 并立即返回，后台 goroutine 继续执行现有 workflow，完成后仍写 step、artifact、review、assistant message | `go test ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers -count=1` 通过 |
 | 2026-05-26 | memory proposal 去重、晋级和 Prompt 带入 | 新增同 scope proposal 合并、`PromoteProposal`、`POST /api/v2/memories/:id/promote`；CreateRun 会检索高置信稳定 `visual_style/user_profile` 记忆并带入 Prompt Agent，proposal 草稿不会直接影响 prompt | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers ./internal/dao/agent_v2_dao -count=1` 通过 |
 | 2026-05-26 | Git 缓存清理 | 将误跟踪的 `.gocache/` 从 Git 索引移除，并新增 `.gitignore` 忽略规则，后续 Go 测试缓存只保留在本地工作区 | `git rm -r --cached .gocache` 已执行；本地缓存文件未删除 |
+| 2026-05-26 | 后端全局响应封装 | 将成功响应码统一为 `200`，保留全局 `{code,msg,data}` 响应壳；分页响应改为 `data.list/page/page_size/total/total_pages`，并新增响应层单元测试覆盖普通成功响应和分页查询响应 | `go test ./pkg/responses ./pkg/errcode ./... -count=1` 通过 |
 
 ## 9. Google 模型数据库配置
 
