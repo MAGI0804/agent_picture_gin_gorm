@@ -62,10 +62,14 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
     redirectToLogin()
     throw new Error(payload.msg || '登录已过期，请重新登录')
   }
-  if (payload.code !== 0) {
+  if (!isSuccess(payload.code)) {
     throw new Error(payload.msg || '请求失败')
   }
   return payload.data
+}
+
+function isSuccess(code: number) {
+  return code === 200 || code === 0
 }
 
 function isAuthExpired<T>(payload: ApiResponse<T>) {
