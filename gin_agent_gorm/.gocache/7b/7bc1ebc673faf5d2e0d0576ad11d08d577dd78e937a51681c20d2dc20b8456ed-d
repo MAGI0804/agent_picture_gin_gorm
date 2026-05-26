@@ -1,0 +1,6 @@
+./google_vision_provider.go
+./legacy_provider.go
+./registry.go
+./google_vision_provider_test.go
+./legacy_provider_test.go
+./registry_test.go

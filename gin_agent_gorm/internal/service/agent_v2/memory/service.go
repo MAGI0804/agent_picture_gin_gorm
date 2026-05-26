@@ -20,19 +20,25 @@ const (
 
 	KindMemoryProposal = "memory_proposal"
 
-	EventTypeCreated = "created"
-	EventTypeDeleted = "deleted"
-	EventTypeUsed    = "used"
+	EventTypeCreated  = "created"
+	EventTypeDeleted  = "deleted"
+	EventTypeUsed     = "used"
+	EventTypeMerged   = "merged"
+	EventTypePromoted = "promoted"
 
 	SourceTypeArtifactFeedback = "artifact_feedback"
 	SourceTypeReview           = "review"
+
+	defaultPromptMemoryConfidence = 0.70
 )
 
 // Repository 定义记忆服务所需的持久化操作接口。
 type Repository interface {
 	CreateMemory(memory *model.ContextMemory) error
+	FindMemory(userID uint, memoryID uint) (model.ContextMemory, error)
 	ListMemories(filter agent_v2_dao.MemoryFilter) ([]model.ContextMemory, error)
 	UpdateMemoryUsage(memoryID uint) error
+	UpdateMemory(memoryID uint, attrs map[string]interface{}) error
 	SoftDeleteMemory(userID uint, memoryID uint) error
 	CreateMemoryEvent(event *model.MemoryEvent) error
 }
@@ -66,6 +72,21 @@ type WriteRequest struct {
 	SourceType     string
 	SourceID       uint
 	ArtifactID     uint
+}
+
+// PromptContextRequest loads stable memories that can safely influence prompt generation.
+type PromptContextRequest struct {
+	UserID         uint
+	ConversationID uint
+	Limit          int
+	MinConfidence  float64
+}
+
+// PromoteProposalInput confirms a draft memory proposal as stable memory.
+type PromoteProposalInput struct {
+	UserID     uint
+	MemoryID   uint
+	Confidence float64
 }
 
 // ArtifactFeedbackProposalInput describes user feedback that can become a draft memory.
@@ -124,6 +145,49 @@ func (svc *Service) Search(request SearchRequest) ([]model.ContextMemory, error)
 		}
 	}
 	return memories, nil
+}
+
+// PromptContext returns stable, high-confidence preference memories for prompt generation.
+func (svc *Service) PromptContext(request PromptContextRequest) ([]model.ContextMemory, error) {
+	if request.UserID == 0 {
+		return nil, errors.New("prompt memory user_id is required")
+	}
+	limit := request.Limit
+	if limit <= 0 {
+		limit = 8
+	}
+	minConfidence := request.MinConfidence
+	if minConfidence <= 0 {
+		minConfidence = defaultPromptMemoryConfidence
+	}
+
+	namespaces := []string{NamespaceVisualStyle, NamespaceUserProfile}
+	result := make([]model.ContextMemory, 0, limit)
+	for _, namespace := range namespaces {
+		memories, err := svc.repo.ListMemories(agent_v2_dao.MemoryFilter{
+			UserID:         request.UserID,
+			ConversationID: request.ConversationID,
+			Namespace:      namespace,
+			MinConfidence:  minConfidence,
+			Limit:          limit,
+		})
+		if err != nil {
+			return result, err
+		}
+		for _, memory := range memories {
+			if len(result) >= limit {
+				return result, nil
+			}
+			if memory.Kind == KindMemoryProposal || memory.Confidence < minConfidence {
+				continue
+			}
+			result = append(result, memory)
+			if err := svc.repo.UpdateMemoryUsage(memory.ID); err != nil {
+				return result, err
+			}
+		}
+	}
+	return result, nil
 }
 
 // Write 创建一条记忆并记录审计事件。
@@ -203,7 +267,7 @@ func (svc *Service) ProposeFromArtifactFeedback(
 	}
 
 	content := feedbackProposalContent(input.ArtifactID, feedbackType, input.Rating, comment)
-	memory, err := svc.Write(WriteRequest{
+	memory, err := svc.writeOrMergeProposal(WriteRequest{
 		UserID:         input.UserID,
 		ConversationID: input.ConversationID,
 		AgentRunID:     input.AgentRunID,
@@ -251,7 +315,7 @@ func (svc *Service) ProposeFromReview(input ReviewProposalInput) (model.ContextM
 		minScore,
 		issueSummary,
 	)
-	memory, err := svc.Write(WriteRequest{
+	memory, err := svc.writeOrMergeProposal(WriteRequest{
 		UserID:         input.UserID,
 		ConversationID: input.ConversationID,
 		AgentRunID:     input.AgentRunID,
@@ -267,6 +331,59 @@ func (svc *Service) ProposeFromReview(input ReviewProposalInput) (model.ContextM
 	})
 	if err != nil {
 		return model.ContextMemory{}, false, err
+	}
+	return memory, true, nil
+}
+
+// PromoteProposal confirms a memory proposal and makes it available to prompt context retrieval.
+func (svc *Service) PromoteProposal(input PromoteProposalInput) (model.ContextMemory, bool, error) {
+	if input.UserID == 0 {
+		return model.ContextMemory{}, false, errors.New("promote memory user_id is required")
+	}
+	if input.MemoryID == 0 {
+		return model.ContextMemory{}, false, errors.New("promote memory id is required")
+	}
+	memory, err := svc.repo.FindMemory(input.UserID, input.MemoryID)
+	if err != nil {
+		return model.ContextMemory{}, false, err
+	}
+	if memory.Kind != KindMemoryProposal {
+		return memory, false, nil
+	}
+	confidence := input.Confidence
+	if confidence <= 0 {
+		confidence = 0.80
+	}
+	if confidence > 1 {
+		confidence = 1
+	}
+	stableKind := memory.Namespace
+	if stableKind == "" {
+		stableKind = NamespaceUserProfile
+	}
+	attrs := map[string]interface{}{
+		"kind":       stableKind,
+		"confidence": confidence,
+	}
+	if err := svc.repo.UpdateMemory(memory.ID, attrs); err != nil {
+		return model.ContextMemory{}, false, err
+	}
+	before := memory.Content
+	memory.Kind = stableKind
+	memory.Confidence = confidence
+	if err := svc.repo.CreateMemoryEvent(&model.MemoryEvent{
+		MemoryID:       memory.ID,
+		UserID:         memory.UserID,
+		ConversationID: memory.ConversationID,
+		AgentRunID:     memory.SourceID,
+		EventType:      EventTypePromoted,
+		SourceType:     memory.SourceType,
+		SourceID:       memory.SourceID,
+		BeforeJSON:     before,
+		AfterJSON:      memory.Content,
+		Reason:         "memory proposal promoted to stable memory",
+	}); err != nil {
+		return memory, true, err
 	}
 	return memory, true, nil
 }
@@ -287,6 +404,59 @@ func (svc *Service) Delete(userID uint, memoryID uint) error {
 		UserID:    userID,
 		EventType: EventTypeDeleted,
 	})
+}
+
+func (svc *Service) writeOrMergeProposal(request WriteRequest) (model.ContextMemory, error) {
+	existing, err := svc.repo.ListMemories(agent_v2_dao.MemoryFilter{
+		UserID:         request.UserID,
+		ConversationID: request.ConversationID,
+		Namespace:      request.Namespace,
+		Scope:          request.Scope,
+		Kind:           KindMemoryProposal,
+		Limit:          1,
+	})
+	if err != nil {
+		return model.ContextMemory{}, err
+	}
+	if len(existing) == 0 {
+		return svc.Write(request)
+	}
+
+	memory := existing[0]
+	mergedContent := mergeContent(memory.Content, request.Content)
+	confidence := maxFloat(memory.Confidence, request.Confidence)
+	attrs := map[string]interface{}{
+		"content":     mergedContent,
+		"confidence":  confidence,
+		"tags_json":   request.TagsJSON,
+		"source_type": request.SourceType,
+		"source_id":   request.SourceID,
+		"artifact_id": request.ArtifactID,
+	}
+	if err := svc.repo.UpdateMemory(memory.ID, attrs); err != nil {
+		return model.ContextMemory{}, err
+	}
+	if err := svc.repo.CreateMemoryEvent(&model.MemoryEvent{
+		MemoryID:       memory.ID,
+		UserID:         memory.UserID,
+		ConversationID: memory.ConversationID,
+		AgentRunID:     request.AgentRunID,
+		EventType:      EventTypeMerged,
+		SourceType:     request.SourceType,
+		SourceID:       request.SourceID,
+		BeforeJSON:     memory.Content,
+		AfterJSON:      mergedContent,
+		Reason:         "merged duplicate memory proposal",
+	}); err != nil {
+		return memory, err
+	}
+	memory.Content = mergedContent
+	memory.Confidence = confidence
+	memory.TagsJSON = request.TagsJSON
+	memory.SourceType = request.SourceType
+	memory.SourceID = request.SourceID
+	memory.ArtifactID = request.ArtifactID
+	return memory, nil
 }
 
 func shouldProposeFeedbackMemory(feedbackType string, rating int, comment string) bool {
@@ -341,4 +511,23 @@ func coalesceText(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func mergeContent(existing string, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	if existing == "" {
+		return next
+	}
+	if next == "" || strings.Contains(existing, next) {
+		return existing
+	}
+	return existing + "\n" + next
+}
+
+func maxFloat(left float64, right float64) float64 {
+	if left > right {
+		return left
+	}
+	return right
 }

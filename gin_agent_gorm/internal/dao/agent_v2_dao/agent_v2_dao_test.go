@@ -31,8 +31,10 @@ type artifactDAOContract interface {
 
 type memoryDAOContract interface {
 	CreateMemory(memory *model.ContextMemory) error
+	FindMemory(userID uint, memoryID uint) (model.ContextMemory, error)
 	ListMemories(filter MemoryFilter) ([]model.ContextMemory, error)
 	UpdateMemoryUsage(memoryID uint) error
+	UpdateMemory(memoryID uint, attrs map[string]interface{}) error
 	SoftDeleteMemory(userID uint, memoryID uint) error
 	CreateMemoryEvent(event *model.MemoryEvent) error
 }

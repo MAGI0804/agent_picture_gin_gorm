@@ -15,12 +15,22 @@ type MemoryFilter struct {
 	ConversationID uint
 	Namespace      string
 	Scope          string
+	Kind           string
+	MinConfidence  float64
 	Limit          int
 }
 
 // CreateMemory 保存一条 V2 记忆。
 func (dao *AgentV2DAO) CreateMemory(memory *model.ContextMemory) error {
 	return database.DB.Create(memory).Error
+}
+
+// FindMemory 按用户校验后读取指定记忆。
+func (dao *AgentV2DAO) FindMemory(userID uint, memoryID uint) (model.ContextMemory, error) {
+	var memory model.ContextMemory
+	err := database.DB.Where("user_id = ? AND id = ? AND deleted_at = ?", userID, memoryID, 0).
+		First(&memory).Error
+	return memory, err
 }
 
 // ListMemories 查询当前用户有权访问的未删除记忆。
@@ -36,6 +46,12 @@ func (dao *AgentV2DAO) ListMemories(filter MemoryFilter) ([]model.ContextMemory,
 	}
 	if filter.Scope != "" {
 		query = query.Where("scope = ?", filter.Scope)
+	}
+	if filter.Kind != "" {
+		query = query.Where("kind = ?", filter.Kind)
+	}
+	if filter.MinConfidence > 0 {
+		query = query.Where("confidence >= ?", filter.MinConfidence)
 	}
 	if filter.Limit > 0 {
 		query = query.Limit(filter.Limit)
@@ -55,6 +71,13 @@ func (dao *AgentV2DAO) UpdateMemoryUsage(memoryID uint) error {
 			"use_count":    gorm.Expr("use_count + ?", 1),
 			"last_used_at": int(time.Now().Unix()),
 		}).Error
+}
+
+// UpdateMemory updates safe memory metadata and content fields.
+func (dao *AgentV2DAO) UpdateMemory(memoryID uint, attrs map[string]interface{}) error {
+	return database.DB.Model(&model.ContextMemory{}).
+		Where("id = ? AND deleted_at = ?", memoryID, 0).
+		Updates(attrs).Error
 }
 
 // SoftDeleteMemory 将标记记为已删除，同时保留可审计性。

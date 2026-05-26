@@ -90,6 +90,48 @@ func TestServiceProposesVisualStyleMemoryFromSelectedFeedback(t *testing.T) {
 	}
 }
 
+func TestServiceMergesDuplicateArtifactFeedbackProposal(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{
+				BaseModel:  model.BaseModel{ID: 88},
+				UserID:     7,
+				Namespace:  NamespaceVisualStyle,
+				Scope:      "artifact:30",
+				Kind:       KindMemoryProposal,
+				Content:    "previous proposal",
+				Confidence: 0.55,
+			},
+		},
+	}
+	svc := NewService(repo)
+
+	memory, proposed, err := svc.ProposeFromArtifactFeedback(ArtifactFeedbackProposalInput{
+		UserID:       7,
+		ArtifactID:   30,
+		FeedbackType: "positive",
+		Comment:      "prefer warmer color",
+	})
+	if err != nil {
+		t.Fatalf("ProposeFromArtifactFeedback() error = %v", err)
+	}
+	if !proposed {
+		t.Fatal("proposed = false, want true")
+	}
+	if memory.ID != 88 {
+		t.Fatalf("memory ID = %d, want existing 88", memory.ID)
+	}
+	if repo.memory.ID != 0 {
+		t.Fatalf("created memory %#v, want merge into existing", repo.memory)
+	}
+	if repo.updatedMemoryID != 88 {
+		t.Fatalf("updated memory ID = %d, want 88", repo.updatedMemoryID)
+	}
+	if repo.event.EventType != EventTypeMerged {
+		t.Fatalf("event type = %q, want %q", repo.event.EventType, EventTypeMerged)
+	}
+}
+
 func TestServiceSkipsEmptyNeutralFeedbackProposal(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := NewService(repo)
@@ -161,6 +203,66 @@ func TestServiceSkipsHighScoreReviewProposal(t *testing.T) {
 	}
 }
 
+func TestServicePromotesMemoryProposal(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{
+				BaseModel:  model.BaseModel{ID: 55},
+				UserID:     7,
+				Namespace:  NamespaceVisualStyle,
+				Scope:      "artifact:30",
+				Kind:       KindMemoryProposal,
+				Content:    "prefer warmer color",
+				Confidence: 0.65,
+			},
+		},
+	}
+	svc := NewService(repo)
+
+	memory, promoted, err := svc.PromoteProposal(PromoteProposalInput{
+		UserID:     7,
+		MemoryID:   55,
+		Confidence: 0.86,
+	})
+	if err != nil {
+		t.Fatalf("PromoteProposal() error = %v", err)
+	}
+	if !promoted {
+		t.Fatal("promoted = false, want true")
+	}
+	if memory.Kind != NamespaceVisualStyle || memory.Confidence != 0.86 {
+		t.Fatalf("memory kind/confidence = %q/%.2f, want visual_style/0.86", memory.Kind, memory.Confidence)
+	}
+	if repo.updatedMemoryID != 55 {
+		t.Fatalf("updated memory ID = %d, want 55", repo.updatedMemoryID)
+	}
+	if repo.event.EventType != EventTypePromoted {
+		t.Fatalf("event type = %q, want %q", repo.event.EventType, EventTypePromoted)
+	}
+}
+
+func TestServiceSkipsPromptContextDraftsAndLowConfidence(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{BaseModel: model.BaseModel{ID: 1}, Namespace: NamespaceVisualStyle, Kind: NamespaceVisualStyle, Content: "stable warm colors", Confidence: 0.90},
+			{BaseModel: model.BaseModel{ID: 2}, Namespace: NamespaceVisualStyle, Kind: KindMemoryProposal, Content: "draft preference", Confidence: 0.95},
+			{BaseModel: model.BaseModel{ID: 3}, Namespace: NamespaceVisualStyle, Kind: NamespaceVisualStyle, Content: "weak preference", Confidence: 0.30},
+		},
+	}
+	svc := NewService(repo)
+
+	items, err := svc.PromptContext(PromptContextRequest{UserID: 7, Limit: 5})
+	if err != nil {
+		t.Fatalf("PromptContext() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].Content != "stable warm colors" {
+		t.Fatalf("item content = %q, want stable warm colors", items[0].Content)
+	}
+}
+
 func TestServiceDeleteSoftDeletesMemoryAndWritesAuditEvent(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := NewService(repo)
@@ -181,6 +283,8 @@ type fakeRepository struct {
 	filter          agent_v2_dao.MemoryFilter
 	memories        []model.ContextMemory
 	memory          model.ContextMemory
+	updatedMemoryID uint
+	updatedAttrs    map[string]interface{}
 	usedIDs         []uint
 	event           model.MemoryEvent
 	deletedUserID   uint
@@ -195,11 +299,60 @@ func (repo *fakeRepository) CreateMemory(memory *model.ContextMemory) error {
 
 func (repo *fakeRepository) ListMemories(filter agent_v2_dao.MemoryFilter) ([]model.ContextMemory, error) {
 	repo.filter = filter
-	return repo.memories, nil
+	result := make([]model.ContextMemory, 0, len(repo.memories))
+	for _, memory := range repo.memories {
+		if filter.UserID != 0 && memory.UserID != 0 && memory.UserID != filter.UserID {
+			continue
+		}
+		if filter.Namespace != "" && memory.Namespace != "" && memory.Namespace != filter.Namespace {
+			continue
+		}
+		if filter.Scope != "" && memory.Scope != filter.Scope {
+			continue
+		}
+		if filter.Kind != "" && memory.Kind != filter.Kind {
+			continue
+		}
+		if filter.MinConfidence > 0 && memory.Confidence < filter.MinConfidence {
+			continue
+		}
+		result = append(result, memory)
+	}
+	return result, nil
+}
+
+func (repo *fakeRepository) FindMemory(userID uint, memoryID uint) (model.ContextMemory, error) {
+	for _, memory := range repo.memories {
+		if memory.ID == memoryID && memory.UserID == userID {
+			return memory, nil
+		}
+	}
+	return model.ContextMemory{}, nil
 }
 
 func (repo *fakeRepository) UpdateMemoryUsage(memoryID uint) error {
 	repo.usedIDs = append(repo.usedIDs, memoryID)
+	return nil
+}
+
+func (repo *fakeRepository) UpdateMemory(memoryID uint, attrs map[string]interface{}) error {
+	repo.updatedMemoryID = memoryID
+	repo.updatedAttrs = attrs
+	for index := range repo.memories {
+		if repo.memories[index].ID != memoryID {
+			continue
+		}
+		if kind, ok := attrs["kind"].(string); ok {
+			repo.memories[index].Kind = kind
+		}
+		if content, ok := attrs["content"].(string); ok {
+			repo.memories[index].Content = content
+		}
+		if confidence, ok := attrs["confidence"].(float64); ok {
+			repo.memories[index].Confidence = confidence
+		}
+		return nil
+	}
 	return nil
 }
 

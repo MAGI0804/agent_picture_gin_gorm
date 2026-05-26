@@ -133,6 +133,26 @@ func (ctrl *AgentV2Controller) DeleteMemory(c *gin.Context) {
 	responses.New(c).ToResponse(gin.H{"deleted": true})
 }
 
+// PromoteMemoryProposal 将一条候选记忆确认为稳定记忆。
+func (ctrl *AgentV2Controller) PromoteMemoryProposal(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	memoryID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.PromoteMemoryRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	memory, promoted, err := app.NewService().PromoteMemoryProposal(userID, memoryID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"memory": memory, "promoted": promoted})
+}
+
 // SelectArtifact 选择一个候选产物。
 func (ctrl *AgentV2Controller) SelectArtifact(c *gin.Context) {
 	userID := auth.CurrentUserID(c)

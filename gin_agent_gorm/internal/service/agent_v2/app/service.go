@@ -53,6 +53,11 @@ type MemorySearchRequest struct {
 	MarkUsed       bool   `json:"mark_used" form:"mark_used"`
 }
 
+// PromoteMemoryRequest confirms a draft memory proposal.
+type PromoteMemoryRequest struct {
+	Confidence float64 `json:"confidence" form:"confidence"`
+}
+
 // SelectArtifactRequest 是选择候选产物请求。
 type SelectArtifactRequest struct {
 	ArtifactVersionID uint `json:"artifact_version_id" form:"artifact_version_id"`
@@ -219,6 +224,15 @@ func (svc *Service) createRun(
 		state.Metadata["vision_model_provider"] = visionConfig.Config.Provider
 		state.Metadata["vision_model_name"] = runtimeTextModelName(visionConfig.Config)
 	}
+	promptMemories, err := svc.memories.PromptContext(memorysvc.PromptContextRequest{
+		UserID:        userID,
+		Limit:         8,
+		MinConfidence: 0.70,
+	})
+	if err != nil {
+		return nil, err
+	}
+	state.MemoryContext = memoryItemsFromModel(promptMemories)
 
 	// 第四步：先落库 Agent Run，再把 run_id 回写到 RunState。
 	run := model.AgentRun{
@@ -379,6 +393,19 @@ func (svc *Service) DeleteMemory(userID uint, memoryID uint) error {
 	return svc.memories.Delete(userID, memoryID)
 }
 
+// PromoteMemoryProposal confirms a draft memory proposal as stable memory.
+func (svc *Service) PromoteMemoryProposal(
+	userID uint,
+	memoryID uint,
+	request PromoteMemoryRequest,
+) (model.ContextMemory, bool, error) {
+	return svc.memories.PromoteProposal(memorysvc.PromoteProposalInput{
+		UserID:     userID,
+		MemoryID:   memoryID,
+		Confidence: request.Confidence,
+	})
+}
+
 // SelectArtifact 选择当前用户有权访问的候选产物。
 func (svc *Service) SelectArtifact(userID uint, artifactID uint, request SelectArtifactRequest) error {
 	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
@@ -528,6 +555,22 @@ func publicArtifactVersions(versions []model.ArtifactVersion) []model.ArtifactVe
 	for index := range result {
 		result[index].ObjectKey = ""
 		result[index].PreviewURL = ""
+	}
+	return result
+}
+
+func memoryItemsFromModel(memories []model.ContextMemory) []domain.MemoryItem {
+	result := make([]domain.MemoryItem, 0, len(memories))
+	for _, memory := range memories {
+		if strings.TrimSpace(memory.Content) == "" {
+			continue
+		}
+		result = append(result, domain.MemoryItem{
+			ID:         memory.ID,
+			Kind:       memory.Kind,
+			Content:    memory.Content,
+			Confidence: memory.Confidence,
+		})
 	}
 	return result
 }

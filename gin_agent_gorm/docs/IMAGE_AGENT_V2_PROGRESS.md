@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | V2 后端骨架 | 已完成 | Run、Step、Workflow、Runtime、DAO、基础 Service 已具备 |
 | 第15节第一轮验收 | 代码链路已闭环 | `/api/v2/conversations/:id/runs` 已接真实 provider adapter、真实 Requirement/Prompt/Image/Artifact/Review Agent 链路、artifact version 写库、V2 前端入口；真实外部模型端到端仍依赖用户配置可用图片模型 |
-| 第16节第二轮后端能力 | 已完成后端切片 | Memory 查询/删除、candidate group、selected artifact、vision review mock、reflection draft、basic budget、idempotency key、V2 鉴权预览代理、review quality_scores 写入、feedback/review memory proposal、异步 Run 后端第一版已实现 |
+| 第16节第二轮后端能力 | 已完成后端切片 | Memory 查询/删除、candidate group、selected artifact、vision review mock、reflection draft、basic budget、idempotency key、V2 鉴权预览代理、review quality_scores 写入、feedback/review memory proposal、proposal 去重/晋级、Prompt 高置信记忆带入、异步 Run 后端第一版已实现 |
 | 前端 V2 Workspace | 已完成第二批 | 新增 `/workspace`，支持输入、模型选择、运行、timeline、artifact board、版本、下载、反馈、选择按钮、Memory 入口、Review/Eval 面板、鉴权预览 blob |
 | 真实图片生成链路 | 已完成后端 E2E | V2 Image Agent 通过 Tool Registry 调用 Google Imagen 真实 provider，并由 Artifact Agent 写入 artifact 与 artifact_version；workflow `0.3.0` 已可接真实 Google Vision Review 或回退 mock；Google Imagen 后端 E2E 已通过，前端 `/workspace` 待本机服务和代理在线后冒烟 |
 
@@ -62,9 +62,9 @@
 | --- | --- | --- | --- | --- |
 | 7.1 记忆分层 | 短期、会话摘要、用户偏好、视觉风格、产物、工具经验、失败反思、评测记忆 | 部分完成 | 已定义 namespace：conversation、user_profile、visual_style、artifact_lineage、tool_experience、reflection | 分层写入策略还未接真实 Agent；评测记忆未完整实现 |
 | 7.2 扩展 `context_memories` | namespace/source/artifact/tags/confidence/embedding/expires/use_count | 已完成基础字段 | model 和 AutoMigrate 已补字段；Memory Service 可查询、写入、删除 | `tags` 当前为 `tags_json`；未接向量库 |
-| 7.3 写入策略 | 只写稳定偏好、用户选择、高分、失败模式 | 已完成第一版 | Memory Service 可写入；selected artifact 会写 feedback；本轮新增 `kind=memory_proposal` 的候选记忆写入，用户选择/正负反馈会形成视觉风格或反思候选，低分 review/should_refine 会形成失败模式候选 | 仍未做冲突降权、重复合并、人工确认后提升为稳定记忆 |
-| 7.4 检索策略 | 会话、用户偏好、视觉风格、失败经验组合检索 | 部分完成 | 支持 user/conversation/namespace/scope/limit 查询 | 语义检索、tag 检索、模型经验检索未完成 |
-| 7.5 冲突处理 | 同 scope 冲突降权旧记忆 | 未完成 | 暂无 | 需实现 ranker/conflict resolver |
+| 7.3 写入策略 | 只写稳定偏好、用户选择、高分、失败模式 | 已完成第二版 | Memory Service 可写入；selected artifact 会写 feedback；`kind=memory_proposal` 候选记忆已接入；同 user/namespace/scope 的重复 proposal 会合并而不是重复写入；新增 proposal 晋级稳定记忆能力 | 仍未做复杂冲突降权和人工确认前端 |
+| 7.4 检索策略 | 会话、用户偏好、视觉风格、失败经验组合检索 | 部分完成 | 支持 user/conversation/namespace/scope/limit 查询；新增 Prompt 上下文检索，只加载非 proposal 且高置信的 `visual_style/user_profile` 记忆，并在 Prompt Agent 中拼入 positive prompt | 语义检索、tag 检索、模型经验检索未完成 |
+| 7.5 冲突处理 | 同 scope 冲突降权旧记忆 | 部分完成 | 同 scope 的 `memory_proposal` 会合并，避免单个 artifact 反复产生重复候选 | 稳定记忆之间的冲突降权、ranker/conflict resolver 未完成 |
 
 ### 2.5 产物、版本和反馈
 
@@ -94,7 +94,7 @@
 
 | 指南章节 | 要求 | 当前状态 | 已完成 | 未完成 / 风险 |
 | --- | --- | --- | --- | --- |
-| 12 前后端 API 建议 | run events、artifact 操作、memory 操作 | 部分完成 | `/api/v2/conversations/:id/runs` 已执行真实 workflow；新增 `/api/v2/conversations/:id/runs/async` 进程内异步第一版；已补 artifacts list、versions、preview、download、feedback、select；memory search/delete 已有 | edit、memory patch、持久化队列/真正增量事件流未完成 |
+| 12 前后端 API 建议 | run events、artifact 操作、memory 操作 | 部分完成 | `/api/v2/conversations/:id/runs` 已执行真实 workflow；新增 `/api/v2/conversations/:id/runs/async` 进程内异步第一版；已补 artifacts list、versions、preview、download、feedback、select；memory search/delete/promote 已有 | edit、memory patch、持久化队列/真正增量事件流未完成 |
 | 16 前端体验建议 | 对话 + 产物 + 过程 + 版本 + 反馈 | 部分完成 | 新增 `/workspace` V2 Workspace 第二批：输入、模型选择、运行、timeline、artifact board、版本、鉴权预览、下载、反馈、选择、Memory、Review/Eval | 编辑/重生成入口、候选对比精排未完成 |
 | 21.10 前端工作台 | 记忆查看、候选图、版本、选择、下载、Review/Eval | 部分完成 | V2 工作台已支持候选图列表、版本、下载、反馈、选择按钮、Memory 查看/删除、Review/Eval 面板 | 编辑/重生成入口、候选精排未完成 |
 
@@ -111,10 +111,10 @@
 | --- | --- | --- | --- | --- |
 | 18 第0周整理基线 | 梳理当前表使用，step timeline，artifact 可追溯 | 部分完成 | step observability 字段、真实 timeline、真实图片 artifact/version 追溯第一批已完成 | 仍需补真实 DB 集成记录和长期可用性记录 |
 | 18 第1周产物版本化 | 3 候选图、选择第2张、feedback/selected | 部分完成 | candidate group、selected feedback 后端能力、V2 feedback API、前端版本/下载/反馈/选择按钮已完成 | 图片 provider 当前不保证 3 张候选；候选精排未完成 |
-| 18 第2周记忆 MVP | 用户偏好自动带入、可删除覆盖 | 部分完成 | namespace 查询/删除已完成；前端 Memory 查看/删除入口已完成；feedback/review 会写入 `memory_proposal` 候选记忆 | 偏好自动带入 Prompt Agent 未完成；候选记忆确认/合并策略未完成 |
+| 18 第2周记忆 MVP | 用户偏好自动带入、可删除覆盖 | 已完成后端第一版 | namespace 查询/删除已完成；前端 Memory 查看/删除入口已完成；feedback/review 会写入 `memory_proposal` 候选记忆；候选记忆可去重合并并通过 API 晋级稳定记忆；Prompt Agent 会自动带入高置信稳定偏好 | 人工确认前端、语义去重和复杂冲突降权未完成 |
 | 18 第3周 Vision Review | VLM/OCR 质量检查，低分问题写入 version | 部分完成 | mock review 已接入 workflow `0.3.0`；Google Gemini Vision Review 后端已接入并写入 `artifact_versions.quality_scores`；low-score reflection draft 和 memory proposal 已完成 | OCR/版面检测和真实 Vision E2E 复验未完成 |
 | 18 第4周自动 Refine | Review 低分自动二次 prompt，最多重试 | 未完成 | 暂无 | Refiner Agent 和 retry budget 未实现 |
-| 18 第5周进化闭环 | Top 5 失败原因，prompt version 回滚 | 部分完成 | reflection/prompt version 表、低分 draft 基础、review/feedback 到 memory proposal 已完成 | Top 5 聚合、prompt promote/rollback、memory proposal 晋级策略未完成 |
+| 18 第5周进化闭环 | Top 5 失败原因，prompt version 回滚 | 部分完成 | reflection/prompt version 表、低分 draft 基础、review/feedback 到 memory proposal、proposal 晋级稳定记忆已完成 | Top 5 聚合、prompt promote/rollback、自动晋级策略未完成 |
 | 19 MVP 技术决策 | 固定 DAG、Redis/Asynq 长任务、MySQL 记忆、复用 provider、先反馈反思 | 部分完成 | 固定 DAG、MySQL 记忆、旧 provider 复用、反馈/反思基础已完成；已新增异步 Run 设计文档；`/runs/async` 进程内后台执行第一版已接入 | Redis/Asynq 持久队列、worker 抢占/重试、真实外部模型运行稳定性未完整验收 |
 
 ## 3. 第14节第一轮开发顺序进度
@@ -126,9 +126,9 @@
 | 3 | Runtime 支持顺序 DAG | 已完成 | `workflow.DAG`、依赖排序、循环/缺失依赖检测；Executor 使用 `OrderedNodes()` | 暂不做并行节点、恢复、重试 |
 | 4 | Artifact Service MVP | 已完成第一批 | 支持 artifact + version 创建、candidate group、选择产物、预览/下载鉴权入口、feedback 写入入口、review quality_scores 写入；V2 list/version/preview/download/feedback/select API 已接上 | edit/version parent 未完成 |
 | 5 | Tool Registry MVP | 已完成 | 支持按 kind/model_config_id 注册和查找工具；定义 Text/Image/Vision/OCR/Segmentation/Safety provider 接口；旧文本/图片 provider 已包装进 V2 tools | ImageEdit/Vision/OCR/Segmentation 真实 provider 未接入 |
-| 6 | Memory Service MVP | 已完成 | 支持 namespace 查询、MarkUsed、写入、软删除、memory event | 尚未接向量检索和冲突降权 |
+| 6 | Memory Service MVP | 已完成后端第二版 | 支持 namespace 查询、MarkUsed、写入、软删除、memory event；支持 proposal 去重合并、Promote 晋级和 Prompt 高置信记忆检索 | 尚未接向量检索和复杂冲突降权 |
 | 7 | 文生图真实链路 | 已完成第二批 | 实现真实 Requirement、Prompt、Image Generation、Artifact Agent；`/api/v2/conversations/:id/runs` 已执行 workflow `0.3.0`，调用真实 provider adapter、写 artifact/version，并接真实 Google Vision 或 mock review 写 quality_scores | Requirement/Prompt 仍是规则型；前端真实 `/workspace` 待冒烟；OCR/refine 未闭环 |
-| 8 | v2 API 第一批 | 已完成第一批 | 已有 run 创建/查询/events；新增 `/runs/async`；新增 memories 查询/删除、artifact select；补齐 artifacts list、versions、preview、download、feedback；run 创建已从 mock workflow 切到真实 workflow | edit、memory patch、持久队列和取消 API 未完成 |
+| 8 | v2 API 第一批 | 已完成第一批 | 已有 run 创建/查询/events；新增 `/runs/async`；新增 memories 查询/删除/promote、artifact select；补齐 artifacts list、versions、preview、download、feedback；run 创建已从 mock workflow 切到真实 workflow | edit、memory patch、持久队列和取消 API 未完成 |
 | 9 | 前端 V2 Workspace 第二批 | 已完成 | `/workspace` 支持输入、模型选择、运行、timeline、artifact board、versions、鉴权预览、download、feedback、选择按钮、Memory 入口、Review/Eval 面板 | 编辑/重生成、候选精排未完成 |
 | 10 | 权限校验 | 部分完成 | run 按 user 校验；artifact service/DAO 按 user 校验；memory 删除按 user 校验；V2 preview/download/feedback/list/version 按 user 校验；access log 脱敏 token/query 并跳过二进制响应体 | 静态 `/artifacts` 仍为兼容保留；签名 URL 未完成 |
 | 11 | 测试和文档同步 | 进行中 | 已补 model、AutoMigrate、DAO、DAG、Artifact、Memory、Tool、Budget、Idempotency、Review、Reflection、Provider Adapter、Image/Artifact Agent、RunState 合并、review quality_scores、workflow review 节点测试；新增本文档、全量指南对齐清单、异步 Run 设计文档 | 后续每次开发后继续更新本文档 |
@@ -172,7 +172,7 @@
 
 | 能力 | 状态 | 已完成 | 未完成 / 备注 |
 | --- | --- | --- | --- |
-| Memory namespace 查询和删除 | 已完成 | `Memory Service` 支持 namespace/scope/conversation 查询、MarkUsed、软删除；新增 `/api/v2/memories`、`/api/v2/memories/search`、`DELETE /api/v2/memories/:id`；前端 Memory 入口已接入 | 偏好自动带入 Prompt Agent 未做 |
+| Memory namespace 查询、删除和晋级 | 已完成后端第二版 | `Memory Service` 支持 namespace/scope/conversation 查询、MarkUsed、软删除、proposal 去重合并、Prompt 高置信记忆检索；新增 `/api/v2/memories`、`/api/v2/memories/search`、`DELETE /api/v2/memories/:id`、`POST /api/v2/memories/:id/promote`；前端 Memory 入口已接入查询/删除 | promote 前端入口、语义去重、复杂冲突降权未做 |
 | candidate group | 已完成 | `Artifact Service` 支持 `CreateCandidateGroup`，同一轮候选图共享 `artifact_group_id`；真实 Artifact Agent 已调用 | provider 当前不保证一次真实返回 3 张候选 |
 | selected artifact | 已完成 | `Artifact Service.SelectArtifact` 更新 `selected_at` 并写入 `artifact_feedback(selected)`；新增 `/api/v2/artifacts/:id/select`；前端选择按钮已接入 | 候选精排未做 |
 | vision review | 已完成后端第一版 | 新增 `MockVisionReviewAgent` 作为降级；新增真实 `VisionReviewAgent` 和 Google Gemini Vision provider，能对 artifact 图片给分、输出 issues/should_refine，并写入 `artifact_versions.quality_scores` | 真实 Vision E2E 待代理/网络在线后复验；OCR/版面检测未做 |
@@ -236,14 +236,14 @@ npm run build
 | 3 | 接入真实 Vision/OCR Review，把质量分写入 `artifact_versions.quality_scores` | 已完成后端接入 | workflow `0.3.0` 已接 mock `vision_review_agent` 并写入 `artifact_versions.quality_scores`；本轮新增真实 `VisionReviewAgent`，可从 Tool Registry 调用 `VisionProvider` 并输出 `overall_score/issues/should_refine`；新增 Google Gemini Vision provider，支持 OpenAI-compatible multimodal chat，把本地 artifact 图片转 data URL 并解析 JSON 评分；`CreateRun` 会自动查找 `capability=vision` 的 Google 文本模型配置并注册 `KindVision`，有配置时 workflow 切到真实 review，无配置时回退 mock；前端 Review/Eval 可展示 | 真实外部 Vision E2E 待本地代理/网络在线后重跑 `googlee2e` 验证；复杂 OCR/版面检测仍未做 |
 | 4 | 补前端 artifact 选择按钮、Memory 入口、Review/Eval 面板 | 已完成 | `/workspace` 已接选择按钮、Memory 查询/删除入口、Review/Eval 面板和质量分展示 | 编辑/重生成、候选精排未做 |
 | 5 | 设计 V2 长任务异步化（Redis/Asynq 或现有任务队列），避免真实图片模型阻塞 HTTP 请求 | 已完成后端第一版 | 新增 [IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md](./IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md)，明确状态模型、API、队列、幂等、worker、前端轮询和验收；本轮新增 `POST /api/v2/conversations/:id/runs/async`，创建 run 后标记 `queued` 并用后台 goroutine 执行现有 workflow，复用 `GET /api/v2/runs/:id` 和 `/events` 查询进度 | 当前是进程内后台执行，不是 Redis/Asynq 持久队列；worker 抢占、重试、取消 API 和前端轮询接入未做 |
-| 6 | 做 feedback/review 到 memory proposal 的闭环，避免用户选择和低分 review 只停留在单次记录 | 已完成第一版 | 新增 Memory Service proposal 能力：artifact selected/positive/negative/rating/comment 会写入 `context_memories`，以 `kind=memory_proposal` 标记；正向/选择反馈进入 `visual_style`，负向反馈和低分 review 进入 `reflection`；`memory_events` 会记录 created 事件并保留 `agent_run_id/source/artifact` | 尚未做 proposal 去重、人工确认、冲突降权和自动晋级稳定记忆 |
+| 6 | 做 feedback/review 到 memory proposal 的闭环，避免用户选择和低分 review 只停留在单次记录 | 已完成第二版 | 新增 Memory Service proposal 能力：artifact selected/positive/negative/rating/comment 会写入 `context_memories`，以 `kind=memory_proposal` 标记；正向/选择反馈进入 `visual_style`，负向反馈和低分 review 进入 `reflection`；`memory_events` 会记录 created/merged/promoted 事件并保留 `agent_run_id/source/artifact`；同 scope proposal 会合并；新增 `POST /api/v2/memories/:id/promote` 晋级稳定记忆；CreateRun 会把高置信稳定偏好带入 Prompt Agent | promote 前端入口、语义去重、复杂冲突降权和自动晋级策略未做 |
 
 下一步建议：
 
 1. 用同一真实 Google 配置从前端 `/workspace` 手工发起一次生成，确认 artifact board、preview、download、feedback、Review/Eval 面板展示与后端 E2E 结果一致。
 2. 在代理/网络在线时重跑 `go test -tags googlee2e ./internal/service/agent_v2/app -run TestGoogleModelEndToEnd -v`，确认真实 Google Vision review 也写入 `artifact_versions.quality_scores`。
 3. 将 `/runs/async` 从进程内 goroutine 升级为 Redis/Asynq 或项目现有持久队列，实现 worker 抢占、重试、取消 API 和前端轮询接入。
-4. 给 `memory_proposal` 增加去重、人工确认/晋级稳定记忆、冲突降权策略，并让 Prompt Agent 检索高置信偏好。
+4. 给 `memory_proposal` 补前端人工确认入口，并继续做语义去重、稳定记忆冲突降权和自动晋级策略。
 5. 评估静态 `/artifacts` 的保留范围：旧入口迁移完成后关闭静态预览，或改为短期签名 URL。
 
 ## 8. 更新日志
@@ -265,6 +265,7 @@ npm run build
 | 2026-05-26 | 真实 Google Vision Review 后端接入 | 新增真实 `VisionReviewAgent` 和 Google Gemini Vision provider；provider 通过 OpenAI-compatible multimodal chat 分析本地 artifact 图片，解析 summary/overall_score/issues/should_refine；workflow 在存在 `capability=vision` 配置时自动切到真实 review，否则回退 mock | `go test ./internal/service/agent_v2/agents ./internal/service/agent_v2/tools ./internal/service/agent_v2/workflow ./internal/service/agent_v2/app ./internal/service/agent_v2/runtime -count=1` 通过 |
 | 2026-05-26 | feedback/review memory proposal 闭环 | 新增 `MemoryService.ProposeFromArtifactFeedback` 和 `ProposeFromReview`；artifact 选择、显式反馈、低分/需 refine 的 review 会写入 `context_memories`，用 `kind=memory_proposal` 保持候选状态，并在 `memory_events` 记录来源 | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app -count=1` 通过 |
 | 2026-05-26 | 异步 Run 后端第一版 | 新增 `CreateRunAsync`、`POST /api/v2/conversations/:id/runs/async`；接口只创建 message/run、标记 `queued` 并立即返回，后台 goroutine 继续执行现有 workflow，完成后仍写 step、artifact、review、assistant message | `go test ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers -count=1` 通过 |
+| 2026-05-26 | memory proposal 去重、晋级和 Prompt 带入 | 新增同 scope proposal 合并、`PromoteProposal`、`POST /api/v2/memories/:id/promote`；CreateRun 会检索高置信稳定 `visual_style/user_profile` 记忆并带入 Prompt Agent，proposal 草稿不会直接影响 prompt | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers ./internal/dao/agent_v2_dao -count=1` 通过 |
 
 ## 9. Google 模型数据库配置
 
