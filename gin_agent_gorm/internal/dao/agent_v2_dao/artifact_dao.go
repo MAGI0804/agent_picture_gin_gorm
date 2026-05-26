@@ -36,6 +36,13 @@ func (dao *AgentV2DAO) CreateArtifactVersion(version *model.ArtifactVersion) err
 	return database.DB.Create(version).Error
 }
 
+// UpdateArtifactVersion updates review or lineage metadata on one artifact version.
+func (dao *AgentV2DAO) UpdateArtifactVersion(artifactID uint, versionID uint, attrs map[string]interface{}) error {
+	return database.DB.Model(&model.ArtifactVersion{}).
+		Where("artifact_id = ? AND id = ?", artifactID, versionID).
+		Updates(attrs).Error
+}
+
 // ListArtifactVersions 读取用户有权访问产物的版本链。
 func (dao *AgentV2DAO) ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error) {
 	var versions []model.ArtifactVersion

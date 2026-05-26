@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"gin-biz-web-api/model"
@@ -136,15 +137,52 @@ func TestServiceSelectArtifactMarksSelectedAndWritesFeedback(t *testing.T) {
 	}
 }
 
+func TestServiceRecordReviewScoresChecksOwnershipAndUpdatesVersions(t *testing.T) {
+	repo := &fakeRepository{artifact: model.Artifact{BaseModel: model.BaseModel{ID: 3}, UserID: 7}}
+	svc := NewService(repo)
+
+	err := svc.RecordReviewScores(ReviewScoresInput{
+		UserID:       7,
+		ArtifactID:   3,
+		VersionID:    5,
+		OverallScore: 0.82,
+		Issues:       []string{"minor composition risk"},
+		ShouldRefine: false,
+		Reviewer:     "mock_vision_review",
+	})
+	if err != nil {
+		t.Fatalf("RecordReviewScores() error = %v", err)
+	}
+	if repo.findUserID != 7 || repo.findArtifactID != 3 {
+		t.Fatalf("FindArtifact called with userID=%d artifactID=%d, want 7/3", repo.findUserID, repo.findArtifactID)
+	}
+	if repo.updatedVersionID != 5 {
+		t.Fatalf("updated version ID = %d, want 5", repo.updatedVersionID)
+	}
+	if repo.updatedVersionArtifactID != 3 {
+		t.Fatalf("updated version artifact ID = %d, want 3", repo.updatedVersionArtifactID)
+	}
+	qualityScores, ok := repo.updatedVersionAttrs["quality_scores"].(string)
+	if !ok || qualityScores == "" {
+		t.Fatalf("quality_scores update = %#v, want JSON string", repo.updatedVersionAttrs["quality_scores"])
+	}
+	if want := `"overall_score":0.82`; !strings.Contains(qualityScores, want) {
+		t.Fatalf("quality_scores = %s, want %s", qualityScores, want)
+	}
+}
+
 type fakeRepository struct {
-	artifact             model.Artifact
-	createdArtifact      bool
-	createdVersion       bool
-	feedback             model.ArtifactFeedback
-	findUserID           uint
-	findArtifactID       uint
-	updatedArtifactID    uint
-	updatedArtifactAttrs map[string]interface{}
+	artifact                 model.Artifact
+	createdArtifact          bool
+	createdVersion           bool
+	feedback                 model.ArtifactFeedback
+	findUserID               uint
+	findArtifactID           uint
+	updatedArtifactID        uint
+	updatedArtifactAttrs     map[string]interface{}
+	updatedVersionArtifactID uint
+	updatedVersionID         uint
+	updatedVersionAttrs      map[string]interface{}
 }
 
 func (repo *fakeRepository) CreateArtifact(artifact *model.Artifact) error {
@@ -175,6 +213,13 @@ func (repo *fakeRepository) ListArtifacts(userID uint, conversationID uint) ([]m
 func (repo *fakeRepository) CreateArtifactVersion(version *model.ArtifactVersion) error {
 	repo.createdVersion = true
 	version.ID = 200
+	return nil
+}
+
+func (repo *fakeRepository) UpdateArtifactVersion(artifactID uint, versionID uint, attrs map[string]interface{}) error {
+	repo.updatedVersionArtifactID = artifactID
+	repo.updatedVersionID = versionID
+	repo.updatedVersionAttrs = attrs
 	return nil
 }
 

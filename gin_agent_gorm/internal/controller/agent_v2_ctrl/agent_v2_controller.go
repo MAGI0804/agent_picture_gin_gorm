@@ -176,6 +176,23 @@ func (ctrl *AgentV2Controller) DownloadArtifact(c *gin.Context) {
 	c.FileAttachment(filePath, agent_svc.SafeDownloadName(artifact.Name))
 }
 
+// PreviewArtifact 内联预览当前用户有权访问的 V2 产物。
+func (ctrl *AgentV2Controller) PreviewArtifact(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	artifact, filePath, err := app.NewService().PreviewArtifact(userID, artifactID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "artifact not found")
+		return
+	}
+	c.Header("Content-Type", artifact.MimeType)
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", agent_svc.SafeDownloadName(artifact.Name)))
+	c.File(filePath)
+}
+
 // RecordArtifactFeedback 写入当前用户对 V2 产物的反馈。
 func (ctrl *AgentV2Controller) RecordArtifactFeedback(c *gin.Context) {
 	userID := auth.CurrentUserID(c)

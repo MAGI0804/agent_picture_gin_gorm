@@ -75,6 +75,37 @@ func TestWorkflowOrderedNodesRejectsCycle(t *testing.T) {
 	}
 }
 
+func TestImageGenerationWorkflowIncludesVisionReviewAfterArtifacts(t *testing.T) {
+	flow := ImageGenerationWorkflow(ImageGenerationWorkflowOptions{})
+
+	nodes, err := flow.OrderedNodes()
+	if err != nil {
+		t.Fatalf("OrderedNodes() error = %v", err)
+	}
+
+	got := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		got = append(got, node.Key())
+	}
+	want := []string{
+		"intent_router",
+		"requirement_agent",
+		"memory_agent",
+		"prompt_agent",
+		"image_generation_agent",
+		"artifact_agent",
+		"vision_review_agent",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ordered nodes = %#v, want %#v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("ordered node %d = %q, want %q; full order = %#v", index, got[index], want[index], got)
+		}
+	}
+}
+
 type testNode struct {
 	key string
 }

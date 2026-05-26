@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"io/ioutil"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -36,8 +37,11 @@ func AccessLog() gin.HandlerFunc {
 	return func(c *gin.Context) {
 
 		// 如果是访问静态资源或 artifacts，不记录响应体
-		skipResponseBody := strings.HasPrefix(c.Request.URL.Path, config.GetString("cfg.upload.static_fs_relative_path")) || 
-			strings.HasPrefix(c.Request.URL.Path, "/artifacts/")
+		requestPath := c.Request.URL.Path
+		skipResponseBody := strings.HasPrefix(requestPath, config.GetString("cfg.upload.static_fs_relative_path")) ||
+			strings.HasPrefix(requestPath, "/artifacts/") ||
+			(strings.HasPrefix(requestPath, "/api/v2/artifacts/") &&
+				(strings.HasSuffix(requestPath, "/preview") || strings.HasSuffix(requestPath, "/download")))
 
 		// 获取 response 内容
 		var responseBodyWriter *AccessLogWriter
@@ -74,15 +78,15 @@ func AccessLog() gin.HandlerFunc {
 
 		// 开始记录日志
 		logFields := []zap.Field{
-			zap.String("request_method", c.Request.Method),                   // 当前请求的方法
-			zap.String("request_url", c.Request.Host+c.Request.URL.String()), // 完整的请求地址（host + path + query）eg：`0.0.0.0:3000/api/user?aa=11&bb=22`
-			zap.String("request_path", c.Request.URL.Path),                   // 只有请求地址，不带参数 eg：`/api/user`
-			zap.String("request_uri", c.Request.RequestURI),                  // 带参数的地址 eg： `/api/user?aa=11&bb=22`
-			zap.String("request_query", c.Request.URL.RawQuery),              // 只有参数 eg：`aa=11&bb=22`
-			zap.String("client_ip", c.ClientIP()), // 客户端的 ip 地址
+			zap.String("request_method", c.Request.Method),                               // 当前请求的方法
+			zap.String("request_url", sanitizedURLString(c.Request.Host, c.Request.URL)), // 完整的请求地址（host + path + query）eg：`0.0.0.0:3000/api/user?aa=11&bb=22`
+			zap.String("request_path", c.Request.URL.Path),                               // 只有请求地址，不带参数 eg：`/api/user`
+			zap.String("request_uri", sanitizedRequestURI(c.Request.URL)),                // 带参数的地址 eg： `/api/user?aa=11&bb=22`
+			zap.String("request_query", sanitizedRawQuery(c.Request.URL.RawQuery)),       // 只有参数 eg：`aa=11&bb=22`
+			zap.String("client_ip", c.ClientIP()),                                        // 客户端的 ip 地址
 			zap.String("remote_addr", c.Request.RemoteAddr),
-			zap.String("user_agent", c.Request.UserAgent()), // 用户请求头
-			zap.Any("headers", c.Request.Header),            // 请求头
+			zap.String("user_agent", c.Request.UserAgent()),        // 用户请求头
+			zap.Any("headers", sanitizedHeaders(c.Request.Header)), // 请求头
 			zap.String("errors", c.Errors.ByType(gin.ErrorTypePrivate).String()),
 			zap.Int("response_status", responseStatus),                  // 当前的响应结果状态码
 			zap.String("code_execute_time", strx.StrMicroseconds(cost)), // 程序执行时间
@@ -111,4 +115,61 @@ func AccessLog() gin.HandlerFunc {
 		logger.Info("HTTP Access Log [ "+cast.ToString(responseStatus)+" ]", logFields...)
 
 	}
+}
+
+func sanitizedHeaders(headers http.Header) map[string][]string {
+	result := make(map[string][]string, len(headers))
+	for key, values := range headers {
+		if isSensitiveHeader(key) {
+			result[key] = []string{"[REDACTED]"}
+			continue
+		}
+		copied := make([]string, len(values))
+		copy(copied, values)
+		result[key] = copied
+	}
+	return result
+}
+
+func isSensitiveHeader(key string) bool {
+	switch strings.ToLower(key) {
+	case "authorization", "cookie", "set-cookie", "token", "x-api-key", "api_key", "apikey", "access_token":
+		return true
+	default:
+		return false
+	}
+}
+
+func sanitizedURLString(host string, requestURL *url.URL) string {
+	if requestURL == nil {
+		return host
+	}
+	cloned := *requestURL
+	cloned.RawQuery = sanitizedRawQuery(requestURL.RawQuery)
+	return host + cloned.String()
+}
+
+func sanitizedRequestURI(requestURL *url.URL) string {
+	if requestURL == nil {
+		return ""
+	}
+	cloned := *requestURL
+	cloned.RawQuery = sanitizedRawQuery(requestURL.RawQuery)
+	return cloned.RequestURI()
+}
+
+func sanitizedRawQuery(rawQuery string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return rawQuery
+	}
+	for key := range values {
+		if isSensitiveHeader(key) {
+			values.Set(key, "[REDACTED]")
+		}
+	}
+	return values.Encode()
 }

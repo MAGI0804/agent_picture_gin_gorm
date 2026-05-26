@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -19,6 +20,7 @@ type Repository interface {
 	UpdateArtifact(artifactID uint, attrs map[string]interface{}) error
 	ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error)
 	CreateArtifactVersion(version *model.ArtifactVersion) error
+	UpdateArtifactVersion(artifactID uint, versionID uint, attrs map[string]interface{}) error
 	ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error)
 	CreateArtifactFeedback(feedback *model.ArtifactFeedback) error
 }
@@ -48,6 +50,17 @@ type SelectArtifactInput struct {
 	UserID            uint
 	ArtifactID        uint
 	ArtifactVersionID uint
+}
+
+// ReviewScoresInput records the review score for one artifact version.
+type ReviewScoresInput struct {
+	UserID       uint
+	ArtifactID   uint
+	VersionID    uint
+	OverallScore float64
+	Issues       []string
+	ShouldRefine bool
+	Reviewer     string
 }
 
 // NewService 创建产物服务实例。
@@ -169,6 +182,36 @@ func (svc *Service) SelectArtifact(input SelectArtifactInput) error {
 	})
 }
 
+// RecordReviewScores stores structured review output on the artifact version.
+func (svc *Service) RecordReviewScores(input ReviewScoresInput) error {
+	if input.UserID == 0 {
+		return errors.New("review score user_id is required")
+	}
+	if input.ArtifactID == 0 {
+		return errors.New("review score artifact_id is required")
+	}
+	if input.VersionID == 0 {
+		return errors.New("review score version_id is required")
+	}
+	if _, err := svc.repo.FindArtifact(input.UserID, input.ArtifactID); err != nil {
+		return err
+	}
+	payload := map[string]interface{}{
+		"overall_score": input.OverallScore,
+		"issues":        input.Issues,
+		"should_refine": input.ShouldRefine,
+		"reviewer":      coalesceReviewer(input.Reviewer),
+		"reviewed_at":   time.Now().Unix(),
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return svc.repo.UpdateArtifactVersion(input.ArtifactID, input.VersionID, map[string]interface{}{
+		"quality_scores": string(data),
+	})
+}
+
 // RecordFeedback 写入用户对产物或产物版本的反馈。
 func (svc *Service) RecordFeedback(feedback model.ArtifactFeedback) error {
 	if feedback.UserID == 0 {
@@ -181,4 +224,11 @@ func (svc *Service) RecordFeedback(feedback model.ArtifactFeedback) error {
 		return errors.New("feedback_type is required")
 	}
 	return svc.repo.CreateArtifactFeedback(&feedback)
+}
+
+func coalesceReviewer(value string) string {
+	if value == "" {
+		return "vision_review"
+	}
+	return value
 }

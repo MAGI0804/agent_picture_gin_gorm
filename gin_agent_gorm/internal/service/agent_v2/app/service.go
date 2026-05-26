@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -184,7 +185,7 @@ func (svc *Service) CreateRun(
 		Status:           domain.RunStatusCreated,
 		TaskType:         state.TaskType,
 		WorkflowName:     "image_generation_v2",
-		WorkflowVersion:  "0.2.0",
+		WorkflowVersion:  "0.3.0",
 		StateJSON:        mustJSON(state),
 		BudgetJSON:       mustJSON(state.Budget),
 		IdempotencyKey:   idempotencyKey,
@@ -217,6 +218,9 @@ func (svc *Service) CreateRun(
 			"state":     finalState,
 		}, err
 	}
+	if err := svc.recordRunReviewScores(userID, finalState); err != nil {
+		return nil, err
+	}
 
 	assistantMessage := model.Message{
 		ConversationID: conversation.ID,
@@ -247,7 +251,7 @@ func (svc *Service) CreateRun(
 		"assistant_message": assistantMessage,
 		"agent_run":         run,
 		"steps":             steps,
-		"artifacts":         artifacts,
+		"artifacts":         publicArtifacts(artifacts),
 		"state":             finalState,
 	}, nil
 }
@@ -314,12 +318,20 @@ func (svc *Service) ListArtifacts(userID uint, conversationID uint) ([]model.Art
 	if _, err := svc.dao.FindConversation(userID, conversationID); err != nil {
 		return nil, err
 	}
-	return svc.artifacts.ListArtifacts(userID, conversationID)
+	artifacts, err := svc.artifacts.ListArtifacts(userID, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	return publicArtifacts(artifacts), nil
 }
 
 // ListArtifactVersions returns all versions of an artifact owned by the user.
 func (svc *Service) ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error) {
-	return svc.artifacts.ListVersions(userID, artifactID)
+	versions, err := svc.artifacts.ListVersions(userID, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	return publicArtifactVersions(versions), nil
 }
 
 // DownloadArtifact resolves an owned artifact to a local file path.
@@ -329,6 +341,11 @@ func (svc *Service) DownloadArtifact(userID uint, artifactID uint) (model.Artifa
 		return artifact, "", err
 	}
 	return artifact, agent_svc.NewObjectStore().Path(artifact.ObjectKey), nil
+}
+
+// PreviewArtifact resolves an owned artifact to a local file path for inline preview.
+func (svc *Service) PreviewArtifact(userID uint, artifactID uint) (model.Artifact, string, error) {
+	return svc.DownloadArtifact(userID, artifactID)
 }
 
 // RecordArtifactFeedback writes feedback after validating artifact ownership.
@@ -348,6 +365,51 @@ func (svc *Service) RecordArtifactFeedback(
 		Rating:            request.Rating,
 		Comment:           strings.TrimSpace(request.Comment),
 	})
+}
+
+func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) error {
+	if len(state.Artifacts) == 0 {
+		return nil
+	}
+	for _, artifact := range state.Artifacts {
+		if artifact.ID == 0 || artifact.VersionID == 0 {
+			continue
+		}
+		if err := svc.artifacts.RecordReviewScores(artifactsvc.ReviewScoresInput{
+			UserID:       userID,
+			ArtifactID:   artifact.ID,
+			VersionID:    artifact.VersionID,
+			OverallScore: state.Review.OverallScore,
+			Issues:       state.Review.Issues,
+			ShouldRefine: state.Review.ShouldRefine,
+			Reviewer:     "mock_vision_review",
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func publicArtifacts(artifacts []model.Artifact) []model.Artifact {
+	result := make([]model.Artifact, len(artifacts))
+	copy(result, artifacts)
+	for index := range result {
+		result[index].ObjectKey = ""
+		if result[index].ID != 0 {
+			result[index].PreviewURL = fmt.Sprintf("/api/v2/artifacts/%d/preview", result[index].ID)
+		}
+	}
+	return result
+}
+
+func publicArtifactVersions(versions []model.ArtifactVersion) []model.ArtifactVersion {
+	result := make([]model.ArtifactVersion, len(versions))
+	copy(result, versions)
+	for index := range result {
+		result[index].ObjectKey = ""
+		result[index].PreviewURL = ""
+	}
+	return result
 }
 
 // coalesce 在请求未指定值时返回默认值。

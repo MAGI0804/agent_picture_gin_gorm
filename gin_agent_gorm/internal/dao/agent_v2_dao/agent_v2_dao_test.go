@@ -24,6 +24,7 @@ type artifactDAOContract interface {
 	UpdateArtifact(artifactID uint, attrs map[string]interface{}) error
 	ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error)
 	CreateArtifactVersion(version *model.ArtifactVersion) error
+	UpdateArtifactVersion(artifactID uint, versionID uint, attrs map[string]interface{}) error
 	ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error)
 	CreateArtifactFeedback(feedback *model.ArtifactFeedback) error
 }

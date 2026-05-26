@@ -40,7 +40,7 @@ func MockImageGenerationWorkflow() Workflow {
 func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 	return Sequential(
 		"image_generation_v2",
-		"0.2.0",
+		"0.3.0",
 		agents.NewIntentRouterAgent(),
 		agents.NewRequirementAgent(),
 		agents.NewMemoryAgent(),
@@ -53,5 +53,6 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 			ModelProvider: options.ModelProvider,
 			ModelName:     options.ModelName,
 		}),
+		agents.NewMockVisionReviewAgent(0.7),
 	)
 }

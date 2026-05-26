@@ -125,6 +125,20 @@ export async function downloadV2Artifact(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
+export async function fetchV2ArtifactPreviewURL(id: number) {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) {
+    headers.set('token', token)
+  }
+  const response = await fetch(`/api/v2/artifacts/${id}/preview`, { headers })
+  if (!response.ok) {
+    throw new Error('预览加载失败')
+  }
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}
+
 export interface OptimizePromptResult {
   original_prompt: string
   optimized_prompt: string

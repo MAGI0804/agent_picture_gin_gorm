@@ -91,6 +91,21 @@ export interface ArtifactVersion {
   updated_at: number
 }
 
+export interface ContextMemory {
+  id: number
+  conversation_id: number
+  user_id: number
+  namespace?: string
+  kind: string
+  scope?: string
+  content: string
+  tags_json?: string
+  confidence?: number
+  use_count?: number
+  created_at: number
+  updated_at: number
+}
+
 export interface GlobalModelConfig {
   id: number
   model_name: string

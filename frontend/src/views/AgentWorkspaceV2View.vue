@@ -120,24 +120,30 @@
           :key="artifact.id"
           type="button"
           class="v2-artifact-item"
-          :class="{ active: artifact.id === selectedArtifact?.id }"
+          :class="{ active: artifact.id === selectedArtifact?.id, chosen: Boolean(artifact.selected_at) }"
           @click="selectArtifact(artifact)"
         >
-          <img v-if="artifact.kind === 'image'" :src="artifact.preview_url" :alt="artifact.name" />
+          <img v-if="artifact.kind === 'image' && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
           <span v-else>{{ artifact.kind }}</span>
           <strong>{{ artifact.name }}</strong>
           <small>{{ artifact.mime_type }}</small>
+          <small v-if="artifact.selected_at" class="v2-selected-badge">已选中</small>
         </button>
       </section>
 
       <section v-if="selectedArtifact" class="v2-preview">
         <div class="v2-preview-head">
           <strong>{{ selectedArtifact.name }}</strong>
-          <button type="button" @click="downloadSelected">下载</button>
+          <div class="v2-preview-actions">
+            <button type="button" :disabled="selectingArtifact" @click="markSelected">
+              {{ selectingArtifact ? '保存中...' : '设为选中' }}
+            </button>
+            <button type="button" @click="downloadSelected">下载</button>
+          </div>
         </div>
         <img
-          v-if="selectedArtifact.kind === 'image'"
-          :src="selectedArtifact.preview_url"
+          v-if="selectedArtifact.kind === 'image' && previewUrlFor(selectedArtifact)"
+          :src="previewUrlFor(selectedArtifact)"
           :alt="selectedArtifact.name"
         />
         <p v-else>{{ selectedArtifact.mime_type }}</p>
@@ -157,7 +163,33 @@
         >
           <span>v{{ version.version_no }} · {{ version.operation }}</span>
           <small>{{ version.model_provider }}/{{ version.model_name }}</small>
+          <small v-if="version.quality_scores">score {{ formatScore(parseQualityScores(version.quality_scores)?.overall_score) }}</small>
         </button>
+      </section>
+
+      <section v-if="selectedArtifact" class="v2-review-panel">
+        <header>
+          <strong>Review / Eval</strong>
+          <small>{{ reviewStatusText }}</small>
+        </header>
+        <div v-if="selectedQualityScores" class="v2-score-block">
+          <div>
+            <span>质量分</span>
+            <strong>{{ formatScore(selectedQualityScores.overall_score) }}</strong>
+          </div>
+          <div>
+            <span>Refine</span>
+            <strong>{{ selectedQualityScores.should_refine ? '需要' : '不需要' }}</strong>
+          </div>
+        </div>
+        <ul v-if="selectedQualityScores?.issues?.length" class="v2-issue-list">
+          <li v-for="issue in selectedQualityScores.issues" :key="issue">{{ issue }}</li>
+        </ul>
+        <p v-else-if="!selectedQualityScores" class="muted">暂无版本质量分。</p>
+        <details v-if="reviewStep" class="v2-step-detail">
+          <summary>vision_review_agent</summary>
+          <p>{{ summarizeStep(reviewStep) }}</p>
+        </details>
       </section>
 
       <section v-if="selectedArtifact" class="v2-feedback">
@@ -181,14 +213,47 @@
           {{ feedbackSending ? '提交中...' : '提交反馈' }}
         </button>
       </section>
+
+      <section class="v2-memory-panel">
+        <header>
+          <div>
+            <strong>Memory</strong>
+            <span>{{ memories.length }} 条</span>
+          </div>
+          <button type="button" :disabled="memoryLoading || !activeConversationId" @click="loadMemories">刷新</button>
+        </header>
+        <label>
+          Namespace
+          <select v-model="memoryNamespace" :disabled="memoryLoading" @change="loadMemories">
+            <option value="">全部</option>
+            <option value="conversation">conversation</option>
+            <option value="user_profile">user_profile</option>
+            <option value="visual_style">visual_style</option>
+            <option value="artifact_lineage">artifact_lineage</option>
+            <option value="tool_experience">tool_experience</option>
+            <option value="reflection">reflection</option>
+          </select>
+        </label>
+        <ul v-if="memories.length" class="v2-memory-list">
+          <li v-for="memory in memories" :key="memory.id">
+            <div>
+              <strong>{{ memory.namespace || memory.kind }}</strong>
+              <p>{{ memory.content }}</p>
+              <small>{{ formatConfidence(memory.confidence) }} · used {{ memory.use_count || 0 }}</small>
+            </div>
+            <button type="button" @click="deleteMemory(memory.id)">删除</button>
+          </li>
+        </ul>
+        <p v-else class="muted">暂无记忆。</p>
+      </section>
     </aside>
   </main>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { apiFetch, downloadV2Artifact } from '../api'
+import { apiFetch, downloadV2Artifact, fetchV2ArtifactPreviewURL } from '../api'
 import type {
   AgentRun,
   AgentStep,
@@ -196,6 +261,7 @@ import type {
   Artifact,
   ArtifactVersion,
   Conversation,
+  ContextMemory,
   ModelSelection
 } from '../types'
 
@@ -219,9 +285,32 @@ const feedbackType = ref('selected')
 const rating = ref(0)
 const feedbackComment = ref('')
 const feedbackSending = ref(false)
+const selectingArtifact = ref(false)
+const previewURLs = ref<Record<number, string>>({})
+const memories = ref<ContextMemory[]>([])
+const memoryNamespace = ref('')
+const memoryLoading = ref(false)
+
+interface QualityScores {
+  overall_score?: number
+  issues?: string[]
+  should_refine?: boolean
+  reviewer?: string
+  reviewed_at?: number
+}
 
 const activeRunId = computed(() => activeRun.value?.id || 0)
 const canRun = computed(() => Boolean(prompt.value.trim() && activeConversationId.value && !running.value))
+const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
+const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
+const reviewStep = computed(() => {
+  return [...steps.value].reverse().find(step => step.step_key === 'vision_review_agent' || step.name === 'vision_review_agent') || null
+})
+const reviewStatusText = computed(() => {
+  if (selectedQualityScores.value?.reviewer) return selectedQualityScores.value.reviewer
+  if (reviewStep.value) return reviewStep.value.status
+  return 'pending'
+})
 const activeTitle = computed(() => {
   return conversations.value.find(item => item.id === activeConversationId.value)?.title || 'V2 图片工作台'
 })
@@ -238,6 +327,10 @@ const runStatusText = computed(() => {
 
 onMounted(async () => {
   await Promise.all([loadModelSelection(), loadConversations()])
+})
+
+onBeforeUnmount(() => {
+  revokeAllPreviewURLs()
 })
 
 async function loadModelSelection() {
@@ -272,7 +365,7 @@ async function openConversation(id: number) {
   steps.value = []
   selectedArtifact.value = null
   versions.value = []
-  await loadArtifacts()
+  await Promise.all([loadArtifacts(), loadMemories()])
 }
 
 async function runAgent() {
@@ -292,7 +385,7 @@ async function runAgent() {
         idempotency_key: `${activeConversationId.value}-${Date.now()}`
       })
     })
-    applyRunResponse(data)
+    await applyRunResponse(data)
     prompt.value = ''
     await loadConversations()
   } catch (error) {
@@ -302,13 +395,16 @@ async function runAgent() {
   }
 }
 
-function applyRunResponse(data: AgentV2RunResponse) {
+async function applyRunResponse(data: AgentV2RunResponse) {
   activeRun.value = data.agent_run
   steps.value = data.steps || []
   artifacts.value = data.artifacts || []
+  cleanupPreviewURLs(artifacts.value)
+  await preloadArtifactPreviews(artifacts.value)
   if (artifacts.value.length) {
-    selectArtifact(artifacts.value[0])
+    await selectArtifact(artifacts.value[0])
   }
+  await loadMemories()
 }
 
 async function refreshRun() {
@@ -323,8 +419,10 @@ async function loadArtifacts() {
   if (!activeConversationId.value) return
   const data = await apiFetch<{ artifacts: Artifact[] }>(`/api/v2/conversations/${activeConversationId.value}/artifacts`)
   artifacts.value = data.artifacts || []
+  cleanupPreviewURLs(artifacts.value)
+  await preloadArtifactPreviews(artifacts.value)
   if (!selectedArtifact.value && artifacts.value.length) {
-    selectArtifact(artifacts.value[0])
+    await selectArtifact(artifacts.value[0])
   }
 }
 
@@ -340,6 +438,29 @@ async function selectArtifact(artifact: Artifact) {
 async function downloadSelected() {
   if (!selectedArtifact.value) return
   await downloadV2Artifact(selectedArtifact.value.id, selectedArtifact.value.name)
+}
+
+async function markSelected() {
+  if (!selectedArtifact.value || selectingArtifact.value) return
+  selectingArtifact.value = true
+  errorMessage.value = ''
+  try {
+    await apiFetch<{ selected: boolean }>(`/api/v2/artifacts/${selectedArtifact.value.id}/select`, {
+      method: 'POST',
+      body: JSON.stringify({
+        artifact_version_id: selectedVersionId.value
+      })
+    })
+    await loadArtifacts()
+    const current = artifacts.value.find(item => item.id === selectedArtifact.value?.id)
+    if (current) {
+      selectedArtifact.value = current
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '选择产物失败'
+  } finally {
+    selectingArtifact.value = false
+  }
 }
 
 async function sendFeedback() {
@@ -361,6 +482,92 @@ async function sendFeedback() {
   } finally {
     feedbackSending.value = false
   }
+}
+
+async function loadMemories() {
+  if (!activeConversationId.value) return
+  memoryLoading.value = true
+  try {
+    const params = new URLSearchParams({
+      conversation_id: String(activeConversationId.value),
+      limit: '20'
+    })
+    if (memoryNamespace.value) {
+      params.set('namespace', memoryNamespace.value)
+    }
+    const data = await apiFetch<{ memories: ContextMemory[] }>(`/api/v2/memories?${params.toString()}`)
+    memories.value = data.memories || []
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '记忆加载失败'
+  } finally {
+    memoryLoading.value = false
+  }
+}
+
+async function deleteMemory(id: number) {
+  await apiFetch<{ deleted: boolean }>(`/api/v2/memories/${id}`, { method: 'DELETE' })
+  memories.value = memories.value.filter(item => item.id !== id)
+}
+
+async function preloadArtifactPreviews(items: Artifact[]) {
+  await Promise.all(items.filter(item => item.kind === 'image').map(async item => {
+    if (previewURLs.value[item.id]) return
+    try {
+      const url = await fetchV2ArtifactPreviewURL(item.id)
+      previewURLs.value = { ...previewURLs.value, [item.id]: url }
+    } catch {
+      previewURLs.value = { ...previewURLs.value, [item.id]: '' }
+    }
+  }))
+}
+
+function cleanupPreviewURLs(items: Artifact[]) {
+  const keep = new Set(items.map(item => item.id))
+  const next = { ...previewURLs.value }
+  for (const [id, url] of Object.entries(previewURLs.value)) {
+    if (!keep.has(Number(id))) {
+      if (url) URL.revokeObjectURL(url)
+      delete next[Number(id)]
+    }
+  }
+  previewURLs.value = next
+}
+
+function revokeAllPreviewURLs() {
+  Object.values(previewURLs.value).forEach(url => {
+    if (url) URL.revokeObjectURL(url)
+  })
+  previewURLs.value = {}
+}
+
+function previewUrlFor(artifact: Artifact) {
+  return previewURLs.value[artifact.id] || ''
+}
+
+function parseQualityScores(raw?: string): QualityScores | null {
+  if (!raw) return null
+  try {
+    const payload = JSON.parse(raw) as QualityScores
+    return {
+      overall_score: typeof payload.overall_score === 'number' ? payload.overall_score : undefined,
+      issues: Array.isArray(payload.issues) ? payload.issues.filter(item => typeof item === 'string') : [],
+      should_refine: Boolean(payload.should_refine),
+      reviewer: typeof payload.reviewer === 'string' ? payload.reviewer : '',
+      reviewed_at: typeof payload.reviewed_at === 'number' ? payload.reviewed_at : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function formatScore(score?: number) {
+  if (typeof score !== 'number') return '-'
+  return `${Math.round(score * 100)}`
+}
+
+function formatConfidence(confidence?: number) {
+  if (typeof confidence !== 'number' || confidence <= 0) return 'confidence -'
+  return `confidence ${Math.round(confidence * 100)}`
 }
 
 function summarizeStep(step: AgentStep) {
