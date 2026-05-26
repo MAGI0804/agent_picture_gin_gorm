@@ -256,3 +256,25 @@ npm run build
 | 2026-05-25 | 全量指南对齐 | 将进度记录范围扩展到 `IMAGE_AGENT_DEVELOPMENT_GUIDE.md` 全部开发要求，不再只对齐 V2 末尾任务 | 文档已更新 |
 | 2026-05-25 | 下一步建议 1-6 | 完成旧文本/图片 provider adapter、真实 Requirement/Prompt/Image/Artifact Agent、V2 run 真实 artifact/version 写库、artifact list/version/download/feedback API、前端 `/workspace` 第一批 | `go test ./...`、`npm run build`、`git diff --check` 通过；真实外部图片模型端到端待凭据验收 |
 | 2026-05-26 | 新的下一步建议 | 完成 V2 preview 鉴权代理、access log 脱敏和二进制跳过、workflow `0.3.0` mock review 入主链路并写 `quality_scores`、前端选择按钮/Memory/Review 面板、异步 Run 设计文档 | `go test ./...`、`npm run build`、`git diff --check` 通过 |
+| 2026-05-26 | Google 模型默认配置 | 明确默认使用 Gemini 3.5 Flash 作为文本/多模态模型，使用 Imagen 4 Ultra 作为最高质量图片生成模型；新增 Google Imagen 原生 `:predict` 图片 provider 分支，模型配置落库到 `model_configs.config_info` | `go test ./internal/service/agent_svc` 通过 |
+| 2026-05-26 | Google 三 Key 隔离配置文档 | 新增 `GOOGLE_MODEL_CONFIG.md`，将 Gemini 文本、Imagen 出图、Gemini Vision 拆成 3 个独立 API Key 和 3 条 `model_configs` 配置，降低单能力限流对其他能力的影响 | 文档已创建 |
+
+## 9. Google 模型数据库配置
+
+本轮默认模型：
+
+- 文本 / 多模态：`gemini-3.5-flash`，用于规划、记忆、Prompt、评审。
+- 图片生成：`imagen-4.0-ultra-generate-001`，用于最高质量出图。
+
+配置存放位置：
+
+- 数据库连接配置：`etc/config.yaml` 的 `DB.Host`、`DB.Port`、`DB.Database`、`DB.Username`、`DB.Password`。
+- 全局模型配置表：`model_configs`。
+- API Key 存放字段：`model_configs.config_info.api_key`。
+- 用户默认选择表：`user_model_configs` 的 `selected_text_model_config_id`、`selected_image_model_config_id`。
+- 用户权限表：`user_model_permissions` 的 `user_id`、`model_config_id`、`can_use`。
+
+推荐落库约定：
+
+- Gemini 3.5 Flash 使用 Google OpenAI-compatible base URL：`https://generativelanguage.googleapis.com/v1beta/openai`。
+- Imagen 4 Ultra 使用 Google Imagen 原生 base URL：`https://generativelanguage.googleapis.com/v1beta`，运行时拼接为 `/models/imagen-4.0-ultra-generate-001:predict`，鉴权 header 为 `x-goog-api-key`。

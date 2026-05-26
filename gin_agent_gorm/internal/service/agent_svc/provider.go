@@ -541,6 +541,9 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 	if isDashScopeProvider(providerName, baseURL) {
 		return provider.generateDashScopeImage(request, baseURL, apiKey, modelName)
 	}
+	if isGoogleImagenProvider(providerName, baseURL, modelName) {
+		return provider.generateGoogleImagenImage(request, baseURL, apiKey, modelName)
+	}
 
 	payload := map[string]interface{}{
 		"model":           modelName,
@@ -558,6 +561,43 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 	}
 
 	file, err := provider.parseOpenAIImageFile(body, request.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedFile{file}, nil
+}
+
+func (provider *HTTPProvider) generateGoogleImagenImage(
+	request GenerationRequest,
+	baseURL string,
+	apiKey string,
+	modelName string,
+) ([]GeneratedFile, error) {
+	parameters := map[string]interface{}{
+		"sampleCount": 1,
+	}
+	if aspectRatio := runtimeConfigString(provider.config, "aspect_ratio", "aspectRatio"); aspectRatio != "" {
+		parameters["aspectRatio"] = aspectRatio
+	}
+	if personGeneration := runtimeConfigString(provider.config, "person_generation", "personGeneration"); personGeneration != "" {
+		parameters["personGeneration"] = personGeneration
+	}
+
+	payload := map[string]interface{}{
+		"instances": []map[string]interface{}{
+			{"prompt": request.Prompt},
+		},
+		"parameters": parameters,
+	}
+	endpoint := googleImagenEndpoint(baseURL, modelName)
+	body, err := provider.doJSON("POST", endpoint, payload, modelName, "image-google-imagen", func(req *http.Request) {
+		req.Header.Set("x-goog-api-key", apiKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := provider.parseGoogleImagenImageFile(body)
 	if err != nil {
 		return nil, err
 	}
@@ -754,6 +794,24 @@ func isJimengProvider(providerName string, baseURL string) bool {
 		strings.Contains(lowerBaseURL, "visual.volcengineapi")
 }
 
+func isGoogleImagenProvider(providerName string, baseURL string, modelName string) bool {
+	lowerBaseURL := strings.ToLower(baseURL)
+	lowerModelName := strings.ToLower(modelName)
+	return (strings.Contains(providerName, "google") || strings.Contains(lowerBaseURL, "generativelanguage.googleapis.com")) &&
+		strings.Contains(lowerModelName, "imagen")
+}
+
+func googleImagenEndpoint(baseURL string, modelName string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.Contains(base, ":predict") {
+		return base
+	}
+	if strings.Contains(strings.ToLower(base), "/models/") {
+		return base + ":predict"
+	}
+	return joinBaseURL(base, "models/"+modelName+":predict")
+}
+
 func runtimeConfigString(config model.UserModelConfig, keys ...string) string {
 	// 对每个提供的键名，尝试多种变体形式进行查找
 	for _, key := range keys {
@@ -872,6 +930,71 @@ func (provider *HTTPProvider) parseOpenAIImageFile(body []byte, prompt string) (
 		return provider.downloadGeneratedImage(response.Data[0].URL)
 	}
 	return GeneratedFile{}, errors.New("image model returned no image payload")
+}
+
+func (provider *HTTPProvider) parseGoogleImagenImageFile(body []byte) (GeneratedFile, error) {
+	var response struct {
+		GeneratedImages []struct {
+			Image struct {
+				ImageBytes string `json:"imageBytes"`
+				MimeType   string `json:"mimeType"`
+			} `json:"image"`
+		} `json:"generatedImages"`
+		Predictions []struct {
+			BytesBase64Encoded string `json:"bytesBase64Encoded"`
+			MimeType           string `json:"mimeType"`
+			Image              struct {
+				BytesBase64Encoded string `json:"bytesBase64Encoded"`
+				ImageBytes         string `json:"imageBytes"`
+				MimeType           string `json:"mimeType"`
+			} `json:"image"`
+		} `json:"predictions"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "decode google imagen response")
+	}
+	if response.Error != nil {
+		return GeneratedFile{}, errors.Errorf("google imagen api error: %s", response.Error.Message)
+	}
+
+	imageBytes := ""
+	mimeType := ""
+	if len(response.GeneratedImages) > 0 {
+		imageBytes = response.GeneratedImages[0].Image.ImageBytes
+		mimeType = response.GeneratedImages[0].Image.MimeType
+	}
+	if imageBytes == "" && len(response.Predictions) > 0 {
+		imageBytes = response.Predictions[0].BytesBase64Encoded
+		mimeType = response.Predictions[0].MimeType
+		if imageBytes == "" {
+			imageBytes = response.Predictions[0].Image.BytesBase64Encoded
+		}
+		if imageBytes == "" {
+			imageBytes = response.Predictions[0].Image.ImageBytes
+		}
+		if mimeType == "" {
+			mimeType = response.Predictions[0].Image.MimeType
+		}
+	}
+	if strings.TrimSpace(imageBytes) == "" {
+		return GeneratedFile{}, errors.New("google imagen model returned no image payload")
+	}
+	content, err := base64.StdEncoding.DecodeString(imageBytes)
+	if err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "decode google imagen image")
+	}
+	if strings.TrimSpace(mimeType) == "" {
+		mimeType = "image/png"
+	}
+	return GeneratedFile{
+		Name:     "generated-image.png",
+		Kind:     "image",
+		MimeType: mimeType,
+		Content:  content,
+	}, nil
 }
 
 func (provider *HTTPProvider) parseDashScopeImageFile(body []byte) (GeneratedFile, error) {
