@@ -14,6 +14,7 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 	group.Use(middleware.AuthJWT())
 	{
 		group.POST("/conversations/:id/runs", ctrl.CreateRun)
+		group.POST("/conversations/:id/runs/async", ctrl.CreateRunAsync)
 		group.GET("/conversations/:id/artifacts", ctrl.ListArtifacts)
 		group.GET("/runs/:id", ctrl.GetRun)
 		group.GET("/runs/:id/events", ctrl.RunEvents)

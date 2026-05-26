@@ -40,6 +40,28 @@ func (ctrl *AgentV2Controller) CreateRun(c *gin.Context) {
 	responses.New(c).ToResponse(result)
 }
 
+// CreateRunAsync 创建一个异步 Agent Run，并立即返回 queued 状态。
+func (ctrl *AgentV2Controller) CreateRunAsync(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	conversationID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var request app.CreateRunRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+
+	result, err := app.NewService().CreateRunAsync(c.Request.Context(), userID, conversationID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(result)
+}
+
 // GetRun 获取指定的 Agent 运行信息
 func (ctrl *AgentV2Controller) GetRun(c *gin.Context) {
 	userID := auth.CurrentUserID(c)

@@ -15,6 +15,11 @@ func init() {
 				"local_path":  config.Get("AIAgent.Storage.LocalPath", "public/artifacts"),
 				"public_path": config.Get("AIAgent.Storage.PublicPath", "/artifacts"),
 			},
+			"proxy": map[string]interface{}{
+				"enabled": config.Get("AIAgent.Proxy.Enabled", false),
+				"http":    config.Get("AIAgent.Proxy.HTTP", "http://127.0.0.1:22307"),
+				"https":   config.Get("AIAgent.Proxy.HTTPS", "http://127.0.0.1:22307"),
+			},
 		}
 	})
 }

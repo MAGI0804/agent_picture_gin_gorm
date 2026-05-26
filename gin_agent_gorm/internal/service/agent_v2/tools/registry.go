@@ -207,8 +207,10 @@ type VisionRequest struct {
 }
 
 type VisionResult struct {
-	Summary string
-	Scores  map[string]float64
+	Summary      string
+	Scores       map[string]float64
+	Issues       []string
+	ShouldRefine bool
 }
 
 type OCRRequest struct {

@@ -90,6 +90,7 @@ type ReviewResult struct {
 	OverallScore float64  `json:"overall_score"`
 	Issues       []string `json:"issues"`
 	ShouldRefine bool     `json:"should_refine"`
+	Reviewer     string   `json:"reviewer"`
 }
 
 // RunBudget 运行预算配置

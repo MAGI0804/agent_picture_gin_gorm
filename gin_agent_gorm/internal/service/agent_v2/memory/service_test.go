@@ -61,6 +61,106 @@ func TestServiceWriteCreatesMemoryAndAuditEvent(t *testing.T) {
 	}
 }
 
+func TestServiceProposesVisualStyleMemoryFromSelectedFeedback(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo)
+
+	memory, proposed, err := svc.ProposeFromArtifactFeedback(ArtifactFeedbackProposalInput{
+		UserID:            7,
+		ConversationID:    9,
+		AgentRunID:        12,
+		ArtifactID:        30,
+		ArtifactVersionID: 40,
+		FeedbackType:      "selected",
+	})
+	if err != nil {
+		t.Fatalf("ProposeFromArtifactFeedback() error = %v", err)
+	}
+	if !proposed {
+		t.Fatal("proposed = false, want true")
+	}
+	if memory.Namespace != NamespaceVisualStyle || memory.Kind != KindMemoryProposal {
+		t.Fatalf("memory namespace/kind = %q/%q, want visual_style/memory_proposal", memory.Namespace, memory.Kind)
+	}
+	if memory.ArtifactID != 30 || memory.SourceType != SourceTypeArtifactFeedback {
+		t.Fatalf("memory source = artifact %d source %q, want artifact 30 artifact_feedback", memory.ArtifactID, memory.SourceType)
+	}
+	if repo.event.AgentRunID != 12 {
+		t.Fatalf("event agent_run_id = %d, want 12", repo.event.AgentRunID)
+	}
+}
+
+func TestServiceSkipsEmptyNeutralFeedbackProposal(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo)
+
+	_, proposed, err := svc.ProposeFromArtifactFeedback(ArtifactFeedbackProposalInput{
+		UserID:       7,
+		ArtifactID:   30,
+		FeedbackType: "neutral",
+	})
+	if err != nil {
+		t.Fatalf("ProposeFromArtifactFeedback() error = %v", err)
+	}
+	if proposed {
+		t.Fatal("proposed = true, want false")
+	}
+	if repo.memory.ID != 0 {
+		t.Fatalf("created memory %#v, want none", repo.memory)
+	}
+}
+
+func TestServiceProposesReflectionMemoryFromLowReview(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo)
+
+	memory, proposed, err := svc.ProposeFromReview(ReviewProposalInput{
+		UserID:            7,
+		ConversationID:    9,
+		AgentRunID:        12,
+		ArtifactID:        30,
+		ArtifactVersionID: 40,
+		OverallScore:      0.42,
+		Issues:            []string{"subject missing", "text unreadable"},
+		ShouldRefine:      true,
+		Reviewer:          "google_vision_review",
+		MinScore:          0.70,
+	})
+	if err != nil {
+		t.Fatalf("ProposeFromReview() error = %v", err)
+	}
+	if !proposed {
+		t.Fatal("proposed = false, want true")
+	}
+	if memory.Namespace != NamespaceReflection || memory.SourceType != SourceTypeReview {
+		t.Fatalf("memory namespace/source = %q/%q, want reflection/review", memory.Namespace, memory.SourceType)
+	}
+	if memory.Confidence >= 0.7 {
+		t.Fatalf("memory confidence = %.2f, want draft confidence below confirmed memory", memory.Confidence)
+	}
+}
+
+func TestServiceSkipsHighScoreReviewProposal(t *testing.T) {
+	repo := &fakeRepository{}
+	svc := NewService(repo)
+
+	_, proposed, err := svc.ProposeFromReview(ReviewProposalInput{
+		UserID:       7,
+		ArtifactID:   30,
+		OverallScore: 0.92,
+		MinScore:     0.70,
+	})
+	if err != nil {
+		t.Fatalf("ProposeFromReview() error = %v", err)
+	}
+	if proposed {
+		t.Fatal("proposed = true, want false")
+	}
+	if repo.memory.ID != 0 {
+		t.Fatalf("created memory %#v, want none", repo.memory)
+	}
+}
+
 func TestServiceDeleteSoftDeletesMemoryAndWritesAuditEvent(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := NewService(repo)
@@ -80,6 +180,7 @@ func TestServiceDeleteSoftDeletesMemoryAndWritesAuditEvent(t *testing.T) {
 type fakeRepository struct {
 	filter          agent_v2_dao.MemoryFilter
 	memories        []model.ContextMemory
+	memory          model.ContextMemory
 	usedIDs         []uint
 	event           model.MemoryEvent
 	deletedUserID   uint
@@ -88,6 +189,7 @@ type fakeRepository struct {
 
 func (repo *fakeRepository) CreateMemory(memory *model.ContextMemory) error {
 	memory.ID = 100
+	repo.memory = *memory
 	return nil
 }
 

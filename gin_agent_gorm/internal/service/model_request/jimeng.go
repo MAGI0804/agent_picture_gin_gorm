@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"gin-biz-web-api/pkg/logger"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -15,9 +14,49 @@ import (
 
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
+
+	"gin-biz-web-api/pkg/config"
+	"gin-biz-web-api/pkg/logger"
 )
 
-var jimengHTTPClient = &http.Client{Timeout: 120 * time.Second}
+var jimengHTTPClient = createHTTPClient(120 * time.Second)
+
+func createHTTPClient(timeout time.Duration) *http.Client {
+	client := &http.Client{Timeout: timeout}
+	if config.Instance() == nil {
+		return client
+	}
+
+	// 检查是否启用了代理
+	if proxyEnabled := config.GetBool("cfg.ai_agent.proxy.enabled", false); proxyEnabled {
+		proxyHTTP := config.GetString("cfg.ai_agent.proxy.http", "")
+		proxyHTTPS := config.GetString("cfg.ai_agent.proxy.https", "")
+
+		if proxyHTTP != "" || proxyHTTPS != "" {
+			transport := &http.Transport{}
+
+			// 设置代理函数
+			transport.Proxy = func(req *http.Request) (*url.URL, error) {
+				var proxyURLStr string
+				if req.URL.Scheme == "https" && proxyHTTPS != "" {
+					proxyURLStr = proxyHTTPS
+				} else if proxyHTTP != "" {
+					proxyURLStr = proxyHTTP
+				}
+
+				if proxyURLStr == "" {
+					return nil, nil // 不使用代理
+				}
+
+				return url.Parse(proxyURLStr)
+			}
+
+			client.Transport = transport
+		}
+	}
+
+	return client
+}
 
 const (
 	JimengReqKey           = "jimeng_seedream46_cvtob"

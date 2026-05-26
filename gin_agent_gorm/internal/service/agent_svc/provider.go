@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"gin-biz-web-api/internal/service/model_request"
 	"gin-biz-web-api/model"
+	pkgconfig "gin-biz-web-api/pkg/config"
 	"gin-biz-web-api/pkg/logger"
 )
 
@@ -66,15 +68,52 @@ type HTTPProvider struct {
 
 func NewProvider() Provider {
 	return &HTTPProvider{
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: createHTTPClient(),
 	}
 }
 
 func NewProviderWithConfig(config model.UserModelConfig) Provider {
 	return &HTTPProvider{
 		config: config,
-		client: &http.Client{Timeout: 60 * time.Second},
+		client: createHTTPClient(),
 	}
+}
+
+func createHTTPClient() *http.Client {
+	client := &http.Client{Timeout: 60 * time.Second}
+	if pkgconfig.Instance() == nil {
+		return client
+	}
+
+	// 检查是否启用了代理
+	if proxyEnabled := pkgconfig.GetBool("cfg.ai_agent.proxy.enabled", false); proxyEnabled {
+		proxyHTTP := pkgconfig.GetString("cfg.ai_agent.proxy.http", "")
+		proxyHTTPS := pkgconfig.GetString("cfg.ai_agent.proxy.https", "")
+
+		if proxyHTTP != "" || proxyHTTPS != "" {
+			transport := &http.Transport{}
+
+			// 设置代理函数
+			transport.Proxy = func(req *http.Request) (*url.URL, error) {
+				var proxyURLStr string
+				if req.URL.Scheme == "https" && proxyHTTPS != "" {
+					proxyURLStr = proxyHTTPS
+				} else if proxyHTTP != "" {
+					proxyURLStr = proxyHTTP
+				}
+
+				if proxyURLStr == "" {
+					return nil, nil // 不使用代理
+				}
+
+				return url.Parse(proxyURLStr)
+			}
+
+			client.Transport = transport
+		}
+	}
+
+	return client
 }
 
 func (provider *HTTPProvider) Chat(request ChatRequest) (ChatResult, error) {

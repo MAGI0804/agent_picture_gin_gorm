@@ -1,7 +1,10 @@
 package memory
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"gin-biz-web-api/internal/dao/agent_v2_dao"
 	"gin-biz-web-api/model"
@@ -12,12 +15,17 @@ const (
 	NamespaceUserProfile     = "user_profile"
 	NamespaceVisualStyle     = "visual_style"
 	NamespaceArtifactLineage = "artifact_lineage"
-	NamespaceToolExperience = "tool_experience"
-	NamespaceReflection       = "reflection"
+	NamespaceToolExperience  = "tool_experience"
+	NamespaceReflection      = "reflection"
+
+	KindMemoryProposal = "memory_proposal"
 
 	EventTypeCreated = "created"
 	EventTypeDeleted = "deleted"
 	EventTypeUsed    = "used"
+
+	SourceTypeArtifactFeedback = "artifact_feedback"
+	SourceTypeReview           = "review"
 )
 
 // Repository 定义记忆服务所需的持久化操作接口。
@@ -48,6 +56,7 @@ type SearchRequest struct {
 type WriteRequest struct {
 	UserID         uint
 	ConversationID uint
+	AgentRunID     uint
 	Namespace      string
 	Scope          string
 	Kind           string
@@ -57,6 +66,32 @@ type WriteRequest struct {
 	SourceType     string
 	SourceID       uint
 	ArtifactID     uint
+}
+
+// ArtifactFeedbackProposalInput describes user feedback that can become a draft memory.
+type ArtifactFeedbackProposalInput struct {
+	UserID            uint
+	ConversationID    uint
+	AgentRunID        uint
+	ArtifactID        uint
+	ArtifactVersionID uint
+	FeedbackType      string
+	Rating            int
+	Comment           string
+}
+
+// ReviewProposalInput describes review output that can become a draft memory.
+type ReviewProposalInput struct {
+	UserID            uint
+	ConversationID    uint
+	AgentRunID        uint
+	ArtifactID        uint
+	ArtifactVersionID uint
+	OverallScore      float64
+	Issues            []string
+	ShouldRefine      bool
+	Reviewer          string
+	MinScore          float64
 }
 
 // NewService 创建记忆服务实例。
@@ -128,6 +163,7 @@ func (svc *Service) Write(request WriteRequest) (model.ContextMemory, error) {
 		MemoryID:       memory.ID,
 		UserID:         memory.UserID,
 		ConversationID: memory.ConversationID,
+		AgentRunID:     request.AgentRunID,
 		EventType:      EventTypeCreated,
 		SourceType:     memory.SourceType,
 		SourceID:       memory.SourceID,
@@ -137,6 +173,102 @@ func (svc *Service) Write(request WriteRequest) (model.ContextMemory, error) {
 		return memory, err
 	}
 	return memory, nil
+}
+
+// ProposeFromArtifactFeedback turns explicit user feedback into a draft memory.
+func (svc *Service) ProposeFromArtifactFeedback(
+	input ArtifactFeedbackProposalInput,
+) (model.ContextMemory, bool, error) {
+	if input.UserID == 0 {
+		return model.ContextMemory{}, false, errors.New("feedback proposal user_id is required")
+	}
+	if input.ArtifactID == 0 {
+		return model.ContextMemory{}, false, errors.New("feedback proposal artifact_id is required")
+	}
+
+	feedbackType := strings.TrimSpace(input.FeedbackType)
+	comment := strings.TrimSpace(input.Comment)
+	if !shouldProposeFeedbackMemory(feedbackType, input.Rating, comment) {
+		return model.ContextMemory{}, false, nil
+	}
+
+	namespace := NamespaceVisualStyle
+	confidence := 0.55
+	if comment != "" {
+		confidence = 0.65
+	}
+	if isNegativeFeedback(feedbackType, input.Rating) {
+		namespace = NamespaceReflection
+		confidence = 0.60
+	}
+
+	content := feedbackProposalContent(input.ArtifactID, feedbackType, input.Rating, comment)
+	memory, err := svc.Write(WriteRequest{
+		UserID:         input.UserID,
+		ConversationID: input.ConversationID,
+		AgentRunID:     input.AgentRunID,
+		Namespace:      namespace,
+		Scope:          artifactScope(input.ArtifactID),
+		Kind:           KindMemoryProposal,
+		Content:        content,
+		TagsJSON:       tagsJSON("artifact_feedback", feedbackType, fmt.Sprintf("artifact:%d", input.ArtifactID)),
+		Confidence:     confidence,
+		SourceType:     SourceTypeArtifactFeedback,
+		SourceID:       input.ArtifactID,
+		ArtifactID:     input.ArtifactID,
+	})
+	if err != nil {
+		return model.ContextMemory{}, false, err
+	}
+	return memory, true, nil
+}
+
+// ProposeFromReview turns low-score review output into a draft reflection memory.
+func (svc *Service) ProposeFromReview(input ReviewProposalInput) (model.ContextMemory, bool, error) {
+	if input.UserID == 0 {
+		return model.ContextMemory{}, false, errors.New("review proposal user_id is required")
+	}
+	if input.ArtifactID == 0 {
+		return model.ContextMemory{}, false, errors.New("review proposal artifact_id is required")
+	}
+	minScore := input.MinScore
+	if minScore <= 0 {
+		minScore = 0.70
+	}
+	if input.OverallScore >= minScore && !input.ShouldRefine {
+		return model.ContextMemory{}, false, nil
+	}
+
+	issueSummary := strings.Join(input.Issues, "; ")
+	if issueSummary == "" {
+		issueSummary = "review score below threshold"
+	}
+	content := fmt.Sprintf(
+		"Review flagged artifact %d version %d with score %.2f below %.2f: %s. Treat this as a draft failure pattern before promoting it to stable memory.",
+		input.ArtifactID,
+		input.ArtifactVersionID,
+		input.OverallScore,
+		minScore,
+		issueSummary,
+	)
+	memory, err := svc.Write(WriteRequest{
+		UserID:         input.UserID,
+		ConversationID: input.ConversationID,
+		AgentRunID:     input.AgentRunID,
+		Namespace:      NamespaceReflection,
+		Scope:          artifactScope(input.ArtifactID),
+		Kind:           KindMemoryProposal,
+		Content:        content,
+		TagsJSON:       tagsJSON("review", input.Reviewer, fmt.Sprintf("artifact:%d", input.ArtifactID)),
+		Confidence:     0.50,
+		SourceType:     SourceTypeReview,
+		SourceID:       input.AgentRunID,
+		ArtifactID:     input.ArtifactID,
+	})
+	if err != nil {
+		return model.ContextMemory{}, false, err
+	}
+	return memory, true, nil
 }
 
 // Delete 软删除一条记忆并记录审计事件。
@@ -155,4 +287,58 @@ func (svc *Service) Delete(userID uint, memoryID uint) error {
 		UserID:    userID,
 		EventType: EventTypeDeleted,
 	})
+}
+
+func shouldProposeFeedbackMemory(feedbackType string, rating int, comment string) bool {
+	if comment != "" || rating != 0 {
+		return true
+	}
+	switch strings.ToLower(feedbackType) {
+	case "selected", "positive", "negative":
+		return true
+	default:
+		return false
+	}
+}
+
+func isNegativeFeedback(feedbackType string, rating int) bool {
+	return strings.EqualFold(feedbackType, "negative") || (rating > 0 && rating <= 2)
+}
+
+func feedbackProposalContent(artifactID uint, feedbackType string, rating int, comment string) string {
+	parts := []string{fmt.Sprintf("User feedback on artifact %d was %s", artifactID, coalesceText(feedbackType, "unspecified"))}
+	if rating != 0 {
+		parts = append(parts, fmt.Sprintf("rating=%d", rating))
+	}
+	if comment != "" {
+		parts = append(parts, fmt.Sprintf("comment=%q", comment))
+	}
+	return strings.Join(parts, "; ") + ". Treat this as a draft memory proposal until confirmed by repeated feedback."
+}
+
+func artifactScope(artifactID uint) string {
+	return fmt.Sprintf("artifact:%d", artifactID)
+}
+
+func tagsJSON(tags ...string) string {
+	cleaned := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag != "" {
+			cleaned = append(cleaned, tag)
+		}
+	}
+	data, err := json.Marshal(cleaned)
+	if err != nil {
+		return "[]"
+	}
+	return string(data)
+}
+
+func coalesceText(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
 }

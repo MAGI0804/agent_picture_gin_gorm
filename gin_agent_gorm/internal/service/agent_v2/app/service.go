@@ -21,7 +21,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const maxIdempotencyKeyLength = 128
+const (
+	maxIdempotencyKeyLength = 128
+	minReviewMemoryScore    = 0.70
+)
 
 // Service 是 Agent V2 的应用服务层，负责把 HTTP 请求编排成一次 Agent Run。
 type Service struct {
@@ -81,6 +84,26 @@ func (svc *Service) CreateRun(
 	conversationID uint,
 	request CreateRunRequest,
 ) (map[string]interface{}, error) {
+	return svc.createRun(ctx, userID, conversationID, request, false)
+}
+
+// CreateRunAsync creates a run, marks it queued, and executes the workflow in the background.
+func (svc *Service) CreateRunAsync(
+	ctx context.Context,
+	userID uint,
+	conversationID uint,
+	request CreateRunRequest,
+) (map[string]interface{}, error) {
+	return svc.createRun(ctx, userID, conversationID, request, true)
+}
+
+func (svc *Service) createRun(
+	ctx context.Context,
+	userID uint,
+	conversationID uint,
+	request CreateRunRequest,
+	async bool,
+) (map[string]interface{}, error) {
 	// 第一步：校验会话归属，v2 接口不能跨用户创建 run。
 	conversation, err := svc.dao.FindConversation(userID, conversationID)
 	if err != nil {
@@ -111,6 +134,7 @@ func (svc *Service) CreateRun(
 		return nil, err
 	}
 	textConfig, textConfigErr := svc.resolveRuntimeModelConfig(userID, "text", request.TextModelConfigID)
+	visionConfig, visionConfigErr := svc.resolveVisionRuntimeModelConfig(userID)
 
 	registry := tools.NewRegistry()
 	imageAdapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
@@ -142,6 +166,20 @@ func (svc *Service) CreateRun(
 				CostPolicy:     "real_provider",
 			},
 			TextProvider: textAdapter,
+		})
+	}
+	if visionConfigErr == nil {
+		_ = registry.Register(tools.Tool{
+			Name:          runtimeTextModelName(visionConfig.Config),
+			Kind:          tools.KindVision,
+			Provider:      visionConfig.Config.Provider,
+			Model:         runtimeTextModelName(visionConfig.Config),
+			ModelConfigID: visionConfig.GlobalID,
+			Capability: tools.Capability{
+				SupportsImageInput: true,
+				CostPolicy:         "real_provider",
+			},
+			VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
 		})
 	}
 
@@ -176,6 +214,11 @@ func (svc *Service) CreateRun(
 			"image_model_name":      runtimeImageModelName(imageConfig.Config),
 		},
 	}
+	if visionConfigErr == nil {
+		state.Metadata["vision_model_config_id"] = uintToString(visionConfig.GlobalID)
+		state.Metadata["vision_model_provider"] = visionConfig.Config.Provider
+		state.Metadata["vision_model_name"] = runtimeTextModelName(visionConfig.Config)
+	}
 
 	// 第四步：先落库 Agent Run，再把 run_id 回写到 RunState。
 	run := model.AgentRun{
@@ -202,14 +245,31 @@ func (svc *Service) CreateRun(
 	// 第五步：执行固定真实图片 workflow，调用 V2 tool registry 并写入 artifact/version。
 	state.RunID = run.ID
 	flow := workflow.ImageGenerationWorkflow(workflow.ImageGenerationWorkflowOptions{
-		Registry:           registry,
-		ArtifactWriter:     svc.artifacts,
-		ImageModelConfigID: imageConfig.GlobalID,
-		CandidateCount:     normalizeCandidateCount(request.CandidateCount),
-		ModelProvider:      imageConfig.Config.Provider,
-		ModelName:          runtimeImageModelName(imageConfig.Config),
+		Registry:            registry,
+		ArtifactWriter:      svc.artifacts,
+		ImageModelConfigID:  imageConfig.GlobalID,
+		VisionModelConfigID: visionConfig.GlobalID,
+		CandidateCount:      normalizeCandidateCount(request.CandidateCount),
+		ModelProvider:       imageConfig.Config.Provider,
+		ModelName:           runtimeImageModelName(imageConfig.Config),
 	})
-	finalState, err := svc.executor.Execute(ctx, state, flow)
+	if async {
+		if err := svc.dao.UpdateRun(run.ID, map[string]interface{}{"status": domain.RunStatusQueued}); err != nil {
+			return nil, err
+		}
+		run.Status = domain.RunStatusQueued
+		go func() {
+			_, _, _ = svc.executePreparedRun(context.Background(), userID, conversation, run, state, flow)
+		}()
+		return map[string]interface{}{
+			"conversation": conversation,
+			"user_message": message,
+			"agent_run":    run,
+			"queued":       true,
+		}, nil
+	}
+
+	finalState, assistantMessage, err := svc.executePreparedRun(ctx, userID, conversation, run, state, flow)
 	if err != nil {
 		steps, _ := svc.dao.ListSteps(userID, run.ID)
 		return map[string]interface{}{
@@ -217,21 +277,6 @@ func (svc *Service) CreateRun(
 			"steps":     steps,
 			"state":     finalState,
 		}, err
-	}
-	if err := svc.recordRunReviewScores(userID, finalState); err != nil {
-		return nil, err
-	}
-
-	assistantMessage := model.Message{
-		ConversationID: conversation.ID,
-		UserID:         userID,
-		Role:           "assistant",
-		InputType:      "agent_result",
-		Content:        "Agent V2 已完成图片生成，并写入产物版本。",
-		AgentRunID:     run.ID,
-	}
-	if err := svc.dao.CreateMessage(&assistantMessage); err != nil {
-		return nil, err
 	}
 
 	// 第六步：重新读取 run 和 steps，返回给前端作为第一版 timeline。
@@ -254,6 +299,36 @@ func (svc *Service) CreateRun(
 		"artifacts":         publicArtifacts(artifacts),
 		"state":             finalState,
 	}, nil
+}
+
+func (svc *Service) executePreparedRun(
+	ctx context.Context,
+	userID uint,
+	conversation model.Conversation,
+	run model.AgentRun,
+	state domain.RunState,
+	flow workflow.Workflow,
+) (domain.RunState, model.Message, error) {
+	finalState, err := svc.executor.Execute(ctx, state, flow)
+	if err != nil {
+		return finalState, model.Message{}, err
+	}
+	if err := svc.recordRunReviewScores(userID, finalState); err != nil {
+		return finalState, model.Message{}, err
+	}
+
+	assistantMessage := model.Message{
+		ConversationID: conversation.ID,
+		UserID:         userID,
+		Role:           "assistant",
+		InputType:      "agent_result",
+		Content:        "Agent V2 已完成图片生成，并写入产物版本。",
+		AgentRunID:     run.ID,
+	}
+	if err := svc.dao.CreateMessage(&assistantMessage); err != nil {
+		return finalState, model.Message{}, err
+	}
+	return finalState, assistantMessage, nil
 }
 
 // GetRun 读取 Agent Run 和已保存的 step timeline。
@@ -306,11 +381,26 @@ func (svc *Service) DeleteMemory(userID uint, memoryID uint) error {
 
 // SelectArtifact 选择当前用户有权访问的候选产物。
 func (svc *Service) SelectArtifact(userID uint, artifactID uint, request SelectArtifactRequest) error {
-	return svc.artifacts.SelectArtifact(artifactsvc.SelectArtifactInput{
+	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
+	if err != nil {
+		return err
+	}
+	if err := svc.artifacts.SelectArtifact(artifactsvc.SelectArtifactInput{
 		UserID:            userID,
 		ArtifactID:        artifactID,
 		ArtifactVersionID: request.ArtifactVersionID,
+	}); err != nil {
+		return err
+	}
+	_, _, err = svc.memories.ProposeFromArtifactFeedback(memorysvc.ArtifactFeedbackProposalInput{
+		UserID:            userID,
+		ConversationID:    artifact.ConversationID,
+		AgentRunID:        artifact.AgentRunID,
+		ArtifactID:        artifactID,
+		ArtifactVersionID: request.ArtifactVersionID,
+		FeedbackType:      artifactsvc.FeedbackTypeSelected,
 	})
+	return err
 }
 
 // ListArtifacts returns V2 artifacts for a conversation after ownership validation.
@@ -354,17 +444,33 @@ func (svc *Service) RecordArtifactFeedback(
 	artifactID uint,
 	request ArtifactFeedbackRequest,
 ) error {
-	if _, err := svc.artifacts.AuthorizeDownload(userID, artifactID); err != nil {
+	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
+	if err != nil {
 		return err
 	}
-	return svc.artifacts.RecordFeedback(model.ArtifactFeedback{
+	feedbackType := strings.TrimSpace(request.FeedbackType)
+	comment := strings.TrimSpace(request.Comment)
+	if err := svc.artifacts.RecordFeedback(model.ArtifactFeedback{
 		ArtifactID:        artifactID,
 		ArtifactVersionID: request.ArtifactVersionID,
 		UserID:            userID,
-		FeedbackType:      strings.TrimSpace(request.FeedbackType),
+		FeedbackType:      feedbackType,
 		Rating:            request.Rating,
-		Comment:           strings.TrimSpace(request.Comment),
+		Comment:           comment,
+	}); err != nil {
+		return err
+	}
+	_, _, err = svc.memories.ProposeFromArtifactFeedback(memorysvc.ArtifactFeedbackProposalInput{
+		UserID:            userID,
+		ConversationID:    artifact.ConversationID,
+		AgentRunID:        artifact.AgentRunID,
+		ArtifactID:        artifactID,
+		ArtifactVersionID: request.ArtifactVersionID,
+		FeedbackType:      feedbackType,
+		Rating:            request.Rating,
+		Comment:           comment,
 	})
+	return err
 }
 
 func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) error {
@@ -382,7 +488,21 @@ func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) er
 			OverallScore: state.Review.OverallScore,
 			Issues:       state.Review.Issues,
 			ShouldRefine: state.Review.ShouldRefine,
-			Reviewer:     "mock_vision_review",
+			Reviewer:     coalesce(state.Review.Reviewer, "mock_vision_review"),
+		}); err != nil {
+			return err
+		}
+		if _, _, err := svc.memories.ProposeFromReview(memorysvc.ReviewProposalInput{
+			UserID:            userID,
+			ConversationID:    state.ConversationID,
+			AgentRunID:        state.RunID,
+			ArtifactID:        artifact.ID,
+			ArtifactVersionID: artifact.VersionID,
+			OverallScore:      state.Review.OverallScore,
+			Issues:            state.Review.Issues,
+			ShouldRefine:      state.Review.ShouldRefine,
+			Reviewer:          state.Review.Reviewer,
+			MinScore:          minReviewMemoryScore,
 		}); err != nil {
 			return err
 		}

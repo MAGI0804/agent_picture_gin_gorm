@@ -53,6 +53,35 @@ func (svc *Service) resolveRuntimeModelConfig(
 	}, nil
 }
 
+func (svc *Service) resolveVisionRuntimeModelConfig(userID uint) (resolvedModelConfig, error) {
+	configs, err := svc.dao.ListPermittedModelConfigs(userID, true, false)
+	if err != nil {
+		return resolvedModelConfig{}, err
+	}
+	for _, config := range configs {
+		if isMockModelConfig(config) || modelConfigCapability(config) != "vision" {
+			continue
+		}
+		runtimeConfig := mergeUserConfigWithGlobalModel(model.UserModelConfig{
+			UserID:      userID,
+			Temperature: "0.2",
+		}, config, "text")
+		if strings.TrimSpace(runtimeConfig.Provider) == "" ||
+			strings.EqualFold(runtimeConfig.Provider, "mock") ||
+			strings.TrimSpace(runtimeConfig.BaseURL) == "" ||
+			strings.TrimSpace(runtimeConfig.APIKey) == "" ||
+			strings.TrimSpace(runtimeConfig.ChatModel) == "" {
+			return resolvedModelConfig{}, errors.New("真实视觉模型配置不完整")
+		}
+		return resolvedModelConfig{
+			Config:   runtimeConfig,
+			GlobalID: config.ID,
+			Global:   config,
+		}, nil
+	}
+	return resolvedModelConfig{}, errors.New("未配置真实视觉模型")
+}
+
 func (svc *Service) permittedGlobalModelConfig(
 	userID uint,
 	modelKind string,
@@ -104,6 +133,10 @@ func modelConfigMatchesKind(config model.ModelConfig, modelKind string) bool {
 func isPreferredTextModel(config model.ModelConfig) bool {
 	modelName := strings.ToLower(strings.TrimSpace(config.ModelName))
 	return strings.Contains(modelName, "deepseek-v4-pro") || strings.Contains(modelName, "deepseek_v4_pro")
+}
+
+func modelConfigCapability(config model.ModelConfig) string {
+	return strings.ToLower(configInfoFirstString(config.ConfigInfo, "capability", "model_capability", "kind"))
 }
 
 func modelKindLabel(modelKind string) string {

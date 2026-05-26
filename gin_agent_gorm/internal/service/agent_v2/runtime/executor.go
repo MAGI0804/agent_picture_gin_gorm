@@ -195,6 +195,9 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		if shouldRefine, ok := result.Output["should_refine"].(bool); ok {
 			state.Review.ShouldRefine = shouldRefine
 		}
+		if reviewer, ok := result.Output["reviewer"].(string); ok {
+			state.Review.Reviewer = reviewer
+		}
 	}
 	return state
 }
