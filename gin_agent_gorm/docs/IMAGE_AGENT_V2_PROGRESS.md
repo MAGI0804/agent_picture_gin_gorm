@@ -236,14 +236,14 @@ npm run build
 | 3 | 接入真实 Vision/OCR Review，把质量分写入 `artifact_versions.quality_scores` | 已完成后端接入 | workflow `0.3.0` 已接 mock `vision_review_agent` 并写入 `artifact_versions.quality_scores`；本轮新增真实 `VisionReviewAgent`，可从 Tool Registry 调用 `VisionProvider` 并输出 `overall_score/issues/should_refine`；新增 Google Gemini Vision provider，支持 OpenAI-compatible multimodal chat，把本地 artifact 图片转 data URL 并解析 JSON 评分；`CreateRun` 会自动查找 `capability=vision` 的 Google 文本模型配置并注册 `KindVision`，有配置时 workflow 切到真实 review，无配置时回退 mock；前端 Review/Eval 可展示 | 真实外部 Vision E2E 待本地代理/网络在线后重跑 `googlee2e` 验证；复杂 OCR/版面检测仍未做 |
 | 4 | 补前端 artifact 选择按钮、Memory 入口、Review/Eval 面板 | 已完成 | `/workspace` 已接选择按钮、Memory 查询/删除入口、Review/Eval 面板和质量分展示 | 编辑/重生成、候选精排未做 |
 | 5 | 设计 V2 长任务异步化（Redis/Asynq 或现有任务队列），避免真实图片模型阻塞 HTTP 请求 | 已完成前后端第二版 | 新增 [IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md](./IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md)，明确状态模型、API、队列、幂等、worker、前端轮询和验收；本轮新增 `POST /api/v2/conversations/:id/runs/async`，创建 run 后标记 `queued` 并用后台 goroutine 执行现有 workflow，复用 `GET /api/v2/runs/:id` 和 `/events` 查询进度；新增 `POST /api/v2/runs/:id/cancel`，可取消 `created/queued/running/waiting_user` 状态 run，executor 每步前后检查 `cancelled`，避免取消后继续推进到 `completed`；`/workspace` 已改为异步创建 run、2 秒轮询 timeline，终态后刷新 artifact/memory，并提供取消按钮 | 当前是进程内后台执行，不是 Redis/Asynq 持久队列；worker 抢占和重试未做 |
-| 6 | 做 feedback/review 到 memory proposal 的闭环，避免用户选择和低分 review 只停留在单次记录 | 已完成第三版 | 新增 Memory Service proposal 能力：artifact selected/positive/negative/rating/comment 会写入 `context_memories`，以 `kind=memory_proposal` 标记；正向/选择反馈进入 `visual_style`，负向反馈和低分 review 进入 `reflection`；`memory_events` 会记录 created/merged/promoted 事件并保留 `agent_run_id/source/artifact`；同 scope proposal 会合并；新增 `POST /api/v2/memories/:id/promote` 晋级稳定记忆；CreateRun 会把高置信稳定偏好带入 Prompt Agent；前端 Memory 面板已对 `memory_proposal` 显示“候选”标记并提供人工确认按钮 | 语义去重、复杂冲突降权和自动晋级策略未做 |
+| 6 | 做 feedback/review 到 memory proposal 的闭环，避免用户选择和低分 review 只停留在单次记录 | 已完成第四版 | 新增 Memory Service proposal 能力：artifact selected/positive/negative/rating/comment 会写入 `context_memories`，以 `kind=memory_proposal` 标记；正向/选择反馈进入 `visual_style`，负向反馈和低分 review 进入 `reflection`；`memory_events` 会记录 created/merged/promoted 事件并保留 `agent_run_id/source/artifact`；同 scope proposal 会合并；新增 `POST /api/v2/memories/:id/promote` 晋级稳定记忆；CreateRun 会把高置信稳定偏好带入 Prompt Agent；前端 Memory 面板已对 `memory_proposal` 显示“候选”标记并提供人工确认按钮；重复命中同 scope proposal 时会提升置信度，达到阈值后自动晋级稳定记忆 | 语义去重、复杂冲突降权未做 |
 
 下一步建议：
 
 1. 用同一真实 Google 配置从前端 `/workspace` 手工发起一次生成，确认 artifact board、preview、download、feedback、Review/Eval 面板展示与后端 E2E 结果一致。
 2. 在代理/网络在线时重跑 `go test -tags googlee2e ./internal/service/agent_v2/app -run TestGoogleModelEndToEnd -v`，确认真实 Google Vision review 也写入 `artifact_versions.quality_scores`。
 3. 将 `/runs/async` 从进程内 goroutine 升级为 Redis/Asynq 或项目现有持久队列，实现 worker 抢占和重试。
-4. 继续完善 `memory_proposal`：语义去重、稳定记忆冲突降权和自动晋级策略。
+4. 继续完善 `memory_proposal`：语义去重和稳定记忆冲突降权。
 5. 后续如需要外链分享，再实现 artifact 短期签名 URL；当前前端预览已统一走鉴权 API，静态 `/artifacts` 默认关闭。
 
 ## 8. 更新日志
@@ -273,6 +273,7 @@ npm run build
 | 2026-05-27 | memory proposal 前端确认入口 | `/workspace` Memory 面板对 `kind=memory_proposal` 的候选记忆显示“候选”标记，并新增“确认”按钮调用 `POST /api/v2/memories/:id/promote`，确认后刷新记忆列表 | `npm run build` 通过 |
 | 2026-05-27 | 静态 artifact 入口收敛 | 新增旧版 `GET /api/artifacts/:id/preview` 鉴权预览；旧版 Chat 与 V2 Workspace 均使用 token header 获取 blob URL，不再依赖静态 `/artifacts`；`AIAgent.Storage.StaticEnabled` 默认 `false`，静态路由只在显式开启时注册 | `go test ./internal/controller/agent_ctrl ./routers ./config -count=1`、`npm run build` 通过 |
 | 2026-05-27 | `/workspace` 异步轮询接入 | V2 Workspace 创建任务改调 `POST /api/v2/conversations/:id/runs/async`；运行中按 2 秒轮询 `GET /api/v2/runs/:id` 更新 timeline，终态后刷新 artifact/memory；新增取消按钮调用 `POST /api/v2/runs/:id/cancel` | `npm run build` 通过 |
+| 2026-05-27 | memory proposal 自动晋级保守策略 | 同一 scope 的候选记忆重复合并时逐步提升置信度，达到 `0.85` 后自动从 `memory_proposal` 晋级为稳定记忆，并记录 promoted 事件；单次反馈仍保持候选，避免过早影响 Prompt | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app -count=1` 通过 |
 
 ## 9. Google 模型数据库配置
 

@@ -132,6 +132,49 @@ func TestServiceMergesDuplicateArtifactFeedbackProposal(t *testing.T) {
 	}
 }
 
+func TestServiceAutoPromotesRepeatedProposalAfterConfidenceThreshold(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{
+				BaseModel:  model.BaseModel{ID: 90},
+				UserID:     7,
+				Namespace:  NamespaceVisualStyle,
+				Scope:      "artifact:30",
+				Kind:       KindMemoryProposal,
+				Content:    "previous matching proposal",
+				Confidence: 0.80,
+			},
+		},
+	}
+	svc := NewService(repo)
+
+	memory, proposed, err := svc.ProposeFromArtifactFeedback(ArtifactFeedbackProposalInput{
+		UserID:       7,
+		AgentRunID:   12,
+		ArtifactID:   30,
+		FeedbackType: "positive",
+		Comment:      "same preference again",
+	})
+	if err != nil {
+		t.Fatalf("ProposeFromArtifactFeedback() error = %v", err)
+	}
+	if !proposed {
+		t.Fatal("proposed = false, want true")
+	}
+	if memory.Kind != NamespaceVisualStyle {
+		t.Fatalf("memory kind = %q, want auto-promoted visual_style", memory.Kind)
+	}
+	if memory.Confidence < autoPromoteProposalConfidence {
+		t.Fatalf("memory confidence = %.2f, want >= %.2f", memory.Confidence, autoPromoteProposalConfidence)
+	}
+	if repo.event.EventType != EventTypePromoted {
+		t.Fatalf("event type = %q, want %q", repo.event.EventType, EventTypePromoted)
+	}
+	if repo.event.AgentRunID != 12 {
+		t.Fatalf("promote event agent_run_id = %d, want 12", repo.event.AgentRunID)
+	}
+}
+
 func TestServiceSkipsEmptyNeutralFeedbackProposal(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := NewService(repo)

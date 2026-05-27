@@ -29,7 +29,9 @@ const (
 	SourceTypeArtifactFeedback = "artifact_feedback"
 	SourceTypeReview           = "review"
 
-	defaultPromptMemoryConfidence = 0.70
+	defaultPromptMemoryConfidence   = 0.70
+	repeatedProposalConfidenceBoost = 0.10
+	autoPromoteProposalConfidence   = 0.85
 )
 
 // Repository 定义记忆服务所需的持久化操作接口。
@@ -357,6 +359,15 @@ func (svc *Service) PromoteProposal(input PromoteProposalInput) (model.ContextMe
 	if confidence > 1 {
 		confidence = 1
 	}
+	return svc.promoteMemory(memory, confidence, "memory proposal promoted to stable memory", 0)
+}
+
+func (svc *Service) promoteMemory(
+	memory model.ContextMemory,
+	confidence float64,
+	reason string,
+	agentRunID uint,
+) (model.ContextMemory, bool, error) {
 	stableKind := memory.Namespace
 	if stableKind == "" {
 		stableKind = NamespaceUserProfile
@@ -375,13 +386,13 @@ func (svc *Service) PromoteProposal(input PromoteProposalInput) (model.ContextMe
 		MemoryID:       memory.ID,
 		UserID:         memory.UserID,
 		ConversationID: memory.ConversationID,
-		AgentRunID:     memory.SourceID,
+		AgentRunID:     agentRunID,
 		EventType:      EventTypePromoted,
 		SourceType:     memory.SourceType,
 		SourceID:       memory.SourceID,
 		BeforeJSON:     before,
 		AfterJSON:      memory.Content,
-		Reason:         "memory proposal promoted to stable memory",
+		Reason:         reason,
 	}); err != nil {
 		return memory, true, err
 	}
@@ -425,6 +436,9 @@ func (svc *Service) writeOrMergeProposal(request WriteRequest) (model.ContextMem
 	memory := existing[0]
 	mergedContent := mergeContent(memory.Content, request.Content)
 	confidence := maxFloat(memory.Confidence, request.Confidence)
+	if confidence < autoPromoteProposalConfidence {
+		confidence = minFloat(1, confidence+repeatedProposalConfidenceBoost)
+	}
 	attrs := map[string]interface{}{
 		"content":     mergedContent,
 		"confidence":  confidence,
@@ -456,6 +470,10 @@ func (svc *Service) writeOrMergeProposal(request WriteRequest) (model.ContextMem
 	memory.SourceType = request.SourceType
 	memory.SourceID = request.SourceID
 	memory.ArtifactID = request.ArtifactID
+	if confidence >= autoPromoteProposalConfidence {
+		promotedMemory, _, err := svc.promoteMemory(memory, confidence, "memory proposal auto-promoted after repeated matching feedback", request.AgentRunID)
+		return promotedMemory, err
+	}
 	return memory, nil
 }
 
@@ -527,6 +545,13 @@ func mergeContent(existing string, next string) string {
 
 func maxFloat(left float64, right float64) float64 {
 	if left > right {
+		return left
+	}
+	return right
+}
+
+func minFloat(left float64, right float64) float64 {
+	if left < right {
 		return left
 	}
 	return right
