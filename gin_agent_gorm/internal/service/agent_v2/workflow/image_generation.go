@@ -67,5 +67,10 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 		}),
 		reviewNode,
 		agents.NewRankerAgent(),
+		agents.NewRefinerAgent(options.Registry, options.ArtifactWriter, agents.RefinerAgentOptions{
+			ImageModelConfigID: options.ImageModelConfigID,
+			ModelProvider:      options.ModelProvider,
+			ModelName:          options.ModelName,
+		}),
 	)
 }

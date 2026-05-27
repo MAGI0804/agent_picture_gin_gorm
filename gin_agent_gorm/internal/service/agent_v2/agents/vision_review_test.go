@@ -2,10 +2,13 @@ package agents
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	artifactsvc "gin-biz-web-api/internal/service/agent_v2/artifact"
 	"gin-biz-web-api/internal/service/agent_v2/domain"
 	"gin-biz-web-api/internal/service/agent_v2/tools"
+	"gin-biz-web-api/model"
 )
 
 func TestMockVisionReviewAgentProducesLowScoreWhenNoArtifact(t *testing.T) {
@@ -290,6 +293,74 @@ func TestRankerAgentRanksCandidateReviews(t *testing.T) {
 	}
 }
 
+func TestRefinerAgentCreatesOneRefinedVersionForLowScoreCandidate(t *testing.T) {
+	imageProvider := &fakeImageGenerationProvider{
+		result: tools.ImageGenerationResult{Images: []tools.GeneratedImage{{
+			Name:       "refined.png",
+			Kind:       "image",
+			MimeType:   "image/png",
+			ObjectKey:  "objects/refined.png",
+			PreviewURL: "/preview/refined",
+			SizeBytes:  123,
+			Hash:       "hash-refined",
+		}}},
+	}
+	writer := &fakeRefineWriter{}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:                    "imagen",
+		Kind:                    tools.KindImageGeneration,
+		ModelConfigID:           9,
+		ImageGenerationProvider: imageProvider,
+		Capability:              tools.Capability{MaxCandidates: 1, SupportedRatios: []string{"16:9"}},
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	agent := NewRefinerAgent(registry, writer, RefinerAgentOptions{
+		ImageModelConfigID: 9,
+		ModelProvider:      "google",
+		ModelName:          "imagen",
+	})
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserID:         7,
+		ConversationID: 8,
+		RunID:          11,
+		UserRequest:    "make a readable Chinese poster",
+		Requirements:   domain.ImageRequirements{AspectRatio: "16:9"},
+		Prompts:        domain.PromptBundle{PositivePrompt: "original prompt", NegativePrompt: "blur", Params: map[string]string{"aspect_ratio": "16:9"}},
+		Review: domain.ReviewResult{
+			ShouldRefine: true,
+			CandidateReviews: []domain.CandidateReview{
+				{ArtifactID: 3, VersionID: 5, OverallScore: 0.42, Issues: []string{"text is unreadable"}, ShouldRefine: true},
+			},
+		},
+		Budget: domain.RunBudget{MaxAutoRefines: 1},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != domain.StepStatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+	if !writer.called {
+		t.Fatal("refine writer was not called")
+	}
+	if writer.input.ParentVersionID != 5 || writer.input.ArtifactID != 3 {
+		t.Fatalf("writer input = %#v, want artifact 3 parent version 5", writer.input)
+	}
+	if writer.input.Image.Operation != "refine" {
+		t.Fatalf("operation = %q, want refine", writer.input.Image.Operation)
+	}
+	refs, ok := result.Output["refined_versions"].([]domain.ArtifactRef)
+	if !ok || len(refs) != 1 || refs[0].VersionID != 200 {
+		t.Fatalf("refined_versions = %#v, want version 200", result.Output["refined_versions"])
+	}
+	if !strings.Contains(imageProvider.request.Prompt, "text is unreadable") {
+		t.Fatalf("refine prompt = %q, want review issue included", imageProvider.request.Prompt)
+	}
+}
+
 type fakeVisionProvider struct {
 	request           tools.VisionRequest
 	requests          []tools.VisionRequest
@@ -316,4 +387,30 @@ type fakeOCRProvider struct {
 func (provider *fakeOCRProvider) ExtractText(ctx context.Context, request tools.OCRRequest) (tools.OCRResult, error) {
 	provider.requests = append(provider.requests, request)
 	return provider.result, nil
+}
+
+type fakeImageGenerationProvider struct {
+	request tools.ImageGenerationRequest
+	result  tools.ImageGenerationResult
+}
+
+func (provider *fakeImageGenerationProvider) GenerateImage(ctx context.Context, request tools.ImageGenerationRequest) (tools.ImageGenerationResult, error) {
+	provider.request = request
+	return provider.result, nil
+}
+
+type fakeRefineWriter struct {
+	called bool
+	input  artifactsvc.CreateRefinedVersionInput
+}
+
+func (writer *fakeRefineWriter) CreateRefinedVersion(input artifactsvc.CreateRefinedVersionInput) (model.ArtifactVersion, error) {
+	writer.called = true
+	writer.input = input
+	version := input.Image
+	version.ID = 200
+	version.ArtifactID = input.ArtifactID
+	version.ParentVersionID = input.ParentVersionID
+	version.VersionNo = 2
+	return version, nil
 }

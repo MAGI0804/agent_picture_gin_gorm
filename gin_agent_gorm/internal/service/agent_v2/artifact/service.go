@@ -69,6 +69,15 @@ type ReviewScoresInput struct {
 	ExtractedText    string
 }
 
+// CreateRefinedVersionInput appends one refined image version to an existing artifact.
+type CreateRefinedVersionInput struct {
+	UserID          uint
+	ArtifactID      uint
+	ParentVersionID uint
+	AgentRunID      uint
+	Image           model.ArtifactVersion
+}
+
 // NewService 创建产物服务实例。
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
@@ -186,6 +195,70 @@ func (svc *Service) SelectArtifact(input SelectArtifactInput) error {
 		UserID:            input.UserID,
 		FeedbackType:      FeedbackTypeSelected,
 	})
+}
+
+// CreateRefinedVersion records an automatic refinement while preserving the parent version.
+func (svc *Service) CreateRefinedVersion(input CreateRefinedVersionInput) (model.ArtifactVersion, error) {
+	if input.UserID == 0 {
+		return model.ArtifactVersion{}, errors.New("refined version user_id is required")
+	}
+	if input.ArtifactID == 0 {
+		return model.ArtifactVersion{}, errors.New("refined version artifact_id is required")
+	}
+	if input.ParentVersionID == 0 {
+		return model.ArtifactVersion{}, errors.New("refined version parent_version_id is required")
+	}
+	if input.Image.ObjectKey == "" {
+		return model.ArtifactVersion{}, errors.New("refined version object_key is required")
+	}
+	artifact, err := svc.repo.FindArtifact(input.UserID, input.ArtifactID)
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	versions, err := svc.repo.ListArtifactVersions(input.UserID, input.ArtifactID)
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	parentFound := false
+	nextVersionNo := 1
+	for _, version := range versions {
+		if version.ID == input.ParentVersionID {
+			parentFound = true
+		}
+		if version.VersionNo >= nextVersionNo {
+			nextVersionNo = version.VersionNo + 1
+		}
+	}
+	if !parentFound {
+		return model.ArtifactVersion{}, errors.New("refined version parent was not found")
+	}
+
+	version := input.Image
+	version.ArtifactID = input.ArtifactID
+	version.ParentVersionID = input.ParentVersionID
+	version.AgentRunID = input.AgentRunID
+	if version.AgentRunID == 0 {
+		version.AgentRunID = artifact.AgentRunID
+	}
+	version.VersionNo = nextVersionNo
+	if version.Operation == "" {
+		version.Operation = "refine"
+	}
+	if err := svc.repo.CreateArtifactVersion(&version); err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	attrs := map[string]interface{}{
+		"object_key":  version.ObjectKey,
+		"preview_url": version.PreviewURL,
+		"hash":        version.Hash,
+	}
+	if version.PreviewURL == "" {
+		attrs["preview_url"] = artifact.PreviewURL
+	}
+	if err := svc.repo.UpdateArtifact(input.ArtifactID, attrs); err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	return version, nil
 }
 
 // RecordReviewScores stores structured review output on the artifact version.

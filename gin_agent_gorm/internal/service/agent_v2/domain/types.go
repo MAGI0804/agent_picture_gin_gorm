@@ -137,6 +137,7 @@ type RunBudget struct {
 	MaxImageGenerations int `json:"max_image_generations"`
 	MaxToolCalls        int `json:"max_tool_calls"`
 	TimeoutSeconds      int `json:"timeout_seconds"`
+	MaxAutoRefines      int `json:"max_auto_refines"`
 }
 
 // MemoryWrite 记忆写入操作

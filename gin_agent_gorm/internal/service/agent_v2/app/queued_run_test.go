@@ -40,7 +40,7 @@ func TestQueuedRunStateUsesRunBudgetJSONWhenStateBudgetMissing(t *testing.T) {
 		BudgetJSON:     `{"max_steps":9,"max_image_generations":2,"timeout_seconds":240}`,
 	})
 
-	if state.Budget != (domain.RunBudget{MaxSteps: 9, MaxImageGenerations: 2, MaxToolCalls: defaultRunMaxToolCalls, TimeoutSeconds: 240}) {
+	if state.Budget != (domain.RunBudget{MaxSteps: 9, MaxImageGenerations: 2, MaxToolCalls: defaultRunMaxToolCalls, TimeoutSeconds: 240, MaxAutoRefines: 1}) {
 		t.Fatalf("Budget = %#v, want budget_json values", state.Budget)
 	}
 }

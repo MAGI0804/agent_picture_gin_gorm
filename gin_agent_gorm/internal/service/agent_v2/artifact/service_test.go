@@ -194,6 +194,47 @@ func TestServiceRecordReviewScoresUsesExplicitRankScore(t *testing.T) {
 	}
 }
 
+func TestServiceCreateRefinedVersionKeepsParentAndUpdatesArtifactPreview(t *testing.T) {
+	repo := &fakeRepository{
+		artifact: model.Artifact{BaseModel: model.BaseModel{ID: 3}, UserID: 7},
+		versions: []model.ArtifactVersion{
+			{BaseModel: model.BaseModel{ID: 5}, ArtifactID: 3, VersionNo: 1, Operation: "generate", ObjectKey: "objects/original.png"},
+		},
+	}
+	svc := NewService(repo)
+
+	version, err := svc.CreateRefinedVersion(CreateRefinedVersionInput{
+		UserID:          7,
+		ArtifactID:      3,
+		ParentVersionID: 5,
+		AgentRunID:      11,
+		Image: model.ArtifactVersion{
+			Operation:      "refine",
+			Prompt:         "improve readability",
+			ModelProvider:  "google",
+			ModelName:      "imagen",
+			ObjectKey:      "objects/refined.png",
+			PreviewURL:     "/preview/refined",
+			Hash:           "hash-refined",
+			SourceRefs:     `[{"version_id":5}]`,
+			QualityScores:  "",
+			NegativePrompt: "blur",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRefinedVersion() error = %v", err)
+	}
+	if version.ParentVersionID != 5 || version.VersionNo != 2 || version.Operation != "refine" {
+		t.Fatalf("version = %#v, want parent 5, v2 refine", version)
+	}
+	if repo.updatedArtifactID != 3 {
+		t.Fatalf("updated artifact ID = %d, want 3", repo.updatedArtifactID)
+	}
+	if repo.updatedArtifactAttrs["object_key"] != "objects/refined.png" || repo.updatedArtifactAttrs["preview_url"] != "/preview/refined" {
+		t.Fatalf("artifact update = %#v, want refined object and preview", repo.updatedArtifactAttrs)
+	}
+}
+
 type fakeRepository struct {
 	artifact                 model.Artifact
 	createdArtifact          bool
@@ -206,6 +247,7 @@ type fakeRepository struct {
 	updatedVersionArtifactID uint
 	updatedVersionID         uint
 	updatedVersionAttrs      map[string]interface{}
+	versions                 []model.ArtifactVersion
 }
 
 func (repo *fakeRepository) CreateArtifact(artifact *model.Artifact) error {
@@ -236,6 +278,7 @@ func (repo *fakeRepository) ListArtifacts(userID uint, conversationID uint) ([]m
 func (repo *fakeRepository) CreateArtifactVersion(version *model.ArtifactVersion) error {
 	repo.createdVersion = true
 	version.ID = 200
+	repo.versions = append(repo.versions, *version)
 	return nil
 }
 
@@ -247,7 +290,7 @@ func (repo *fakeRepository) UpdateArtifactVersion(artifactID uint, versionID uin
 }
 
 func (repo *fakeRepository) ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error) {
-	return []model.ArtifactVersion{}, nil
+	return append([]model.ArtifactVersion{}, repo.versions...), nil
 }
 
 func (repo *fakeRepository) CreateArtifactFeedback(feedback *model.ArtifactFeedback) error {

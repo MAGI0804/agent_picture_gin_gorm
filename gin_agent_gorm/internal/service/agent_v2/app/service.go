@@ -247,6 +247,7 @@ func (svc *Service) createRun(
 			MaxImageGenerations: normalizeCandidateCount(request.CandidateCount),
 			MaxToolCalls:        defaultRunMaxToolCalls,
 			TimeoutSeconds:      180,
+			MaxAutoRefines:      1,
 		},
 		Metadata: map[string]string{
 			"runtime":               "agent_v2_real_image_generation",

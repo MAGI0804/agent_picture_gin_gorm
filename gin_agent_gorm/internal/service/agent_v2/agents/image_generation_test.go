@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	artifactsvc "gin-biz-web-api/internal/service/agent_v2/artifact"
 	"gin-biz-web-api/internal/service/agent_v2/domain"
 	"gin-biz-web-api/internal/service/agent_v2/tools"
 	"gin-biz-web-api/model"
@@ -69,6 +70,14 @@ func (writer *fakeArtifactWriter) CreateCandidateGroup(
 		versions = append(versions, model.ArtifactVersion{BaseModel: model.BaseModel{ID: uint(index + 20)}})
 	}
 	return artifacts, versions, nil
+}
+
+func (writer *fakeArtifactWriter) CreateRefinedVersion(input artifactsvc.CreateRefinedVersionInput) (model.ArtifactVersion, error) {
+	version := input.Image
+	version.ID = 99
+	version.ArtifactID = input.ArtifactID
+	version.ParentVersionID = input.ParentVersionID
+	return version, nil
 }
 
 func TestRequirementAgentUsesTextProviderStructuredJSON(t *testing.T) {

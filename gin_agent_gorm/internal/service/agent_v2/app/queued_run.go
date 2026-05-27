@@ -102,6 +102,9 @@ func queuedRunState(run model.AgentRun) domain.RunState {
 	if state.Budget.TimeoutSeconds == 0 {
 		state.Budget.TimeoutSeconds = 180
 	}
+	if state.Budget.MaxAutoRefines == 0 {
+		state.Budget.MaxAutoRefines = 1
+	}
 	return state
 }
 
