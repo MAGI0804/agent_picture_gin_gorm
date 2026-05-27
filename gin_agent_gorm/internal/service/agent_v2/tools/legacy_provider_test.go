@@ -130,3 +130,38 @@ func TestLegacyProviderAdapterGenerateImageStoresGeneratedFiles(t *testing.T) {
 		t.Fatalf("Prompt = %q, want %q", provider.generationRequest.Prompt, "a clean poster")
 	}
 }
+
+func TestLegacyProviderAdapterPrefixesMultiCandidateObjectKeys(t *testing.T) {
+	provider := &fakeLegacyProvider{
+		files: []agent_svc.GeneratedFile{
+			{Name: "poster.png", Kind: "image", MimeType: "image/png", Content: []byte("first")},
+			{Name: "poster.png", Kind: "image", MimeType: "image/png", Content: []byte("second")},
+		},
+	}
+	adapter := NewLegacyProviderAdapterWithDependencies(provider, &fakeLegacyObjectStore{}, model.UserModelConfig{
+		UserID:     7,
+		Provider:   "jimeng",
+		ImageModel: "image-model",
+	})
+
+	result, err := adapter.GenerateImage(context.Background(), ImageGenerationRequest{
+		UserID:              7,
+		ConversationID:      8,
+		RunID:               9,
+		Prompt:              "a clean poster",
+		CandidateCount:      2,
+		CandidateStartIndex: 1,
+	})
+	if err != nil {
+		t.Fatalf("GenerateImage() error = %v", err)
+	}
+	if len(result.Images) != 2 {
+		t.Fatalf("len(Images) = %d, want 2", len(result.Images))
+	}
+	if result.Images[0].ObjectKey != "user-7/conversation-8/run-9/candidate-2-poster.png" {
+		t.Fatalf("first ObjectKey = %q, want candidate-indexed key", result.Images[0].ObjectKey)
+	}
+	if result.Images[1].ObjectKey != "user-7/conversation-8/run-9/candidate-3-poster.png" {
+		t.Fatalf("second ObjectKey = %q, want candidate-indexed key", result.Images[1].ObjectKey)
+	}
+}

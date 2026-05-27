@@ -74,3 +74,53 @@ func TestApplyStepResultMergesRealImageWorkflowOutputs(t *testing.T) {
 		t.Fatalf("Artifacts = %#v, want version 20", state.Artifacts)
 	}
 }
+
+func TestApplyStepResultMergesCandidateReviews(t *testing.T) {
+	state := applyStepResult(domain.RunState{}, "vision_review_agent", domain.StepResult{
+		Summary: "reviewed",
+		Output: map[string]interface{}{
+			"overall_score": 0.91,
+			"candidate_reviews": []domain.CandidateReview{
+				{ArtifactID: 1, VersionID: 10, ImageRef: "/preview/1", OverallScore: 0.77, Issues: []string{"minor crop"}, Reviewer: "real_vision_review"},
+				{ArtifactID: 2, VersionID: 20, ImageRef: "/preview/2", OverallScore: 0.91, Reviewer: "real_vision_review"},
+			},
+		},
+	})
+
+	if len(state.Review.CandidateReviews) != 2 {
+		t.Fatalf("CandidateReviews = %#v, want 2 reviews", state.Review.CandidateReviews)
+	}
+	if state.Review.CandidateReviews[1].ArtifactID != 2 || state.Review.CandidateReviews[1].OverallScore != 0.91 {
+		t.Fatalf("second candidate review = %#v, want artifact 2 score 0.91", state.Review.CandidateReviews[1])
+	}
+
+	state = applyStepResult(state, "ranker_agent", domain.StepResult{
+		Summary: "ranked",
+		Output: map[string]interface{}{
+			"candidate_reviews": []interface{}{
+				map[string]interface{}{
+					"artifact_id":   float64(2),
+					"version_id":    float64(20),
+					"overall_score": 0.91,
+					"rank_score":    0.96,
+					"reviewer":      "ranker_agent",
+				},
+				map[string]interface{}{
+					"artifact_id":   float64(1),
+					"version_id":    float64(10),
+					"overall_score": 0.77,
+					"rank_score":    0.80,
+					"issues":        []interface{}{"minor crop"},
+				},
+			},
+			"overall_score": 0.91,
+		},
+	})
+
+	if len(state.Review.CandidateReviews) != 2 {
+		t.Fatalf("ranked CandidateReviews = %#v, want 2 reviews", state.Review.CandidateReviews)
+	}
+	if state.Review.CandidateReviews[0].ArtifactID != 2 || state.Review.CandidateReviews[0].RankScore != 0.96 {
+		t.Fatalf("top ranked candidate = %#v, want artifact 2 rank 0.96", state.Review.CandidateReviews[0])
+	}
+}

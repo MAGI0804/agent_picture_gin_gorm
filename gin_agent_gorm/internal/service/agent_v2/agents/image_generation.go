@@ -307,32 +307,43 @@ func (agent *ImageGenerationAgent) Run(ctx context.Context, state domain.RunStat
 	negativePrompt := truncateRunes(state.Prompts.NegativePrompt, tool.Capability.MaxPromptChars)
 	aspectRatio := supportedAspectRatio(state.Requirements.AspectRatio, tool.Capability.SupportedRatios)
 	count := constrainedCandidateCount(agent.options.CandidateCount, tool.Capability.MaxCandidates)
-	result, err := tool.ImageGenerationProvider.GenerateImage(ctx, tools.ImageGenerationRequest{
-		UserID:         state.UserID,
-		ConversationID: state.ConversationID,
-		RunID:          state.RunID,
-		StepID:         state.CurrentStepID,
-		TaskType:       state.TaskType,
-		Intent:         state.Intent,
-		Prompt:         prompt,
-		NegativePrompt: negativePrompt,
-		AspectRatio:    aspectRatio,
-		CandidateCount: count,
-	})
-	if err != nil {
-		return domain.StepResult{}, err
-	}
-	images := make([]domain.GeneratedImageRef, 0, len(result.Images))
-	for _, image := range result.Images {
-		images = append(images, domain.GeneratedImageRef{
-			Name:       image.Name,
-			Kind:       coalesce(image.Kind, "image"),
-			MimeType:   image.MimeType,
-			ObjectKey:  image.ObjectKey,
-			PreviewURL: image.PreviewURL,
-			SizeBytes:  image.SizeBytes,
-			Hash:       image.Hash,
+
+	images := make([]domain.GeneratedImageRef, 0, count)
+	for len(images) < count {
+		remaining := count - len(images)
+		result, err := tool.ImageGenerationProvider.GenerateImage(ctx, tools.ImageGenerationRequest{
+			UserID:              state.UserID,
+			ConversationID:      state.ConversationID,
+			RunID:               state.RunID,
+			StepID:              state.CurrentStepID,
+			TaskType:            state.TaskType,
+			Intent:              state.Intent,
+			Prompt:              prompt,
+			NegativePrompt:      negativePrompt,
+			AspectRatio:         aspectRatio,
+			CandidateCount:      remaining,
+			CandidateStartIndex: len(images),
 		})
+		if err != nil {
+			return domain.StepResult{}, err
+		}
+		if len(result.Images) == 0 {
+			break
+		}
+		for _, image := range result.Images {
+			if len(images) >= count {
+				break
+			}
+			images = append(images, domain.GeneratedImageRef{
+				Name:       image.Name,
+				Kind:       coalesce(image.Kind, "image"),
+				MimeType:   image.MimeType,
+				ObjectKey:  image.ObjectKey,
+				PreviewURL: image.PreviewURL,
+				SizeBytes:  image.SizeBytes,
+				Hash:       image.Hash,
+			})
+		}
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,

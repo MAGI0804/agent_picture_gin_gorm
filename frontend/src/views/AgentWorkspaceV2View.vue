@@ -136,25 +136,36 @@
       <header>
         <div>
           <strong>Artifact Board</strong>
-          <span>{{ artifacts.length }} 个产物</span>
+          <span>{{ artifacts.length }} 个产物 · 按 Rank 排序</span>
         </div>
         <button type="button" :disabled="!activeConversationId" @click="loadArtifacts">刷新</button>
       </header>
 
       <section class="v2-artifact-grid">
         <button
-          v-for="artifact in artifacts"
+          v-for="(artifact, index) in rankedArtifacts"
           :key="artifact.id"
           type="button"
           class="v2-artifact-item"
-          :class="{ active: artifact.id === selectedArtifact?.id, chosen: Boolean(artifact.selected_at) }"
+          :class="{
+            active: artifact.id === selectedArtifact?.id,
+            chosen: Boolean(artifact.selected_at),
+            recommended: isRecommendedArtifact(artifact)
+          }"
           @click="selectArtifact(artifact)"
         >
           <img v-if="artifact.kind === 'image' && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
           <span v-else>{{ artifact.kind }}</span>
           <strong>{{ artifact.name }}</strong>
           <small>{{ artifact.mime_type }}</small>
-          <small v-if="artifact.selected_at" class="v2-selected-badge">已选中</small>
+          <div class="v2-artifact-metrics">
+            <small>#{{ index + 1 }}</small>
+            <small>Rank {{ formatRankScore(artifact.rank_score) }}</small>
+          </div>
+          <div class="v2-artifact-badges">
+            <small v-if="isRecommendedArtifact(artifact)" class="v2-recommended-badge">推荐</small>
+            <small v-if="artifact.selected_at" class="v2-selected-badge">已选中</small>
+          </div>
         </button>
       </section>
 
@@ -207,6 +218,10 @@
           <div>
             <span>Refine</span>
             <strong>{{ selectedQualityScores.should_refine ? '需要' : '不需要' }}</strong>
+          </div>
+          <div>
+            <span>排序分</span>
+            <strong>{{ formatRankScore(selectedQualityScores.rank_score ?? selectedArtifact.rank_score) }}</strong>
           </div>
         </div>
         <ul v-if="selectedQualityScores?.issues?.length" class="v2-issue-list">
@@ -341,6 +356,7 @@ const resumingRun = ref(false)
 
 interface QualityScores {
   overall_score?: number
+  rank_score?: number
   issues?: string[]
   should_refine?: boolean
   reviewer?: string
@@ -365,6 +381,14 @@ const canResumeRun = computed(() => {
 })
 const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
+const rankedArtifacts = computed(() => {
+  return [...artifacts.value].sort((left, right) => {
+    const rankDelta = (right.rank_score || 0) - (left.rank_score || 0)
+    if (rankDelta !== 0) return rankDelta
+    return right.id - left.id
+  })
+})
+const recommendedArtifactId = computed(() => rankedArtifacts.value[0]?.id || 0)
 const reviewStep = computed(() => {
   return [...steps.value].reverse().find(step => step.step_key === 'vision_review_agent' || step.name === 'vision_review_agent') || null
 })
@@ -479,8 +503,8 @@ async function applyRunResponse(data: AgentV2RunResponse) {
   artifacts.value = data.artifacts || []
   cleanupPreviewURLs(artifacts.value)
   await preloadArtifactPreviews(artifacts.value)
-  if (artifacts.value.length) {
-    await selectArtifact(artifacts.value[0])
+  if (rankedArtifacts.value.length) {
+    await selectArtifact(rankedArtifacts.value[0])
   }
   await loadMemories()
 }
@@ -545,8 +569,14 @@ async function loadArtifacts() {
   artifacts.value = data.artifacts || []
   cleanupPreviewURLs(artifacts.value)
   await preloadArtifactPreviews(artifacts.value)
-  if (!selectedArtifact.value && artifacts.value.length) {
-    await selectArtifact(artifacts.value[0])
+  if (selectedArtifact.value) {
+    const current = artifacts.value.find(item => item.id === selectedArtifact.value?.id)
+    if (current) {
+      selectedArtifact.value = current
+    }
+  }
+  if (!selectedArtifact.value && rankedArtifacts.value.length) {
+    await selectArtifact(rankedArtifacts.value[0])
   }
 }
 
@@ -732,6 +762,7 @@ function parseQualityScores(raw?: string): QualityScores | null {
     const payload = JSON.parse(raw) as QualityScores
     return {
       overall_score: typeof payload.overall_score === 'number' ? payload.overall_score : undefined,
+      rank_score: typeof payload.rank_score === 'number' ? payload.rank_score : undefined,
       issues: Array.isArray(payload.issues) ? payload.issues.filter(item => typeof item === 'string') : [],
       should_refine: Boolean(payload.should_refine),
       reviewer: typeof payload.reviewer === 'string' ? payload.reviewer : '',
@@ -745,6 +776,16 @@ function parseQualityScores(raw?: string): QualityScores | null {
 function formatScore(score?: number) {
   if (typeof score !== 'number') return '-'
   return `${Math.round(score * 100)}`
+}
+
+function formatRankScore(score?: number) {
+  if (typeof score !== 'number') return '-'
+  if (score >= 0 && score <= 1) return `${Math.round(score * 100)}`
+  return score.toFixed(2)
+}
+
+function isRecommendedArtifact(artifact: Artifact) {
+  return artifact.id === recommendedArtifactId.value
 }
 
 function formatConfidence(confidence?: number) {

@@ -714,18 +714,20 @@ func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) er
 	if len(state.Artifacts) == 0 {
 		return nil
 	}
-	for _, artifact := range state.Artifacts {
-		if artifact.ID == 0 || artifact.VersionID == 0 {
+	reviews := candidateReviewsForPersistence(state)
+	for _, review := range reviews {
+		if review.ArtifactID == 0 || review.VersionID == 0 {
 			continue
 		}
 		if err := svc.artifacts.RecordReviewScores(artifactsvc.ReviewScoresInput{
 			UserID:       userID,
-			ArtifactID:   artifact.ID,
-			VersionID:    artifact.VersionID,
-			OverallScore: state.Review.OverallScore,
-			Issues:       state.Review.Issues,
-			ShouldRefine: state.Review.ShouldRefine,
-			Reviewer:     coalesce(state.Review.Reviewer, "mock_vision_review"),
+			ArtifactID:   review.ArtifactID,
+			VersionID:    review.VersionID,
+			OverallScore: review.OverallScore,
+			RankScore:    review.RankScore,
+			Issues:       review.Issues,
+			ShouldRefine: review.ShouldRefine,
+			Reviewer:     coalesce(review.Reviewer, coalesce(state.Review.Reviewer, "mock_vision_review")),
 		}); err != nil {
 			return err
 		}
@@ -733,18 +735,37 @@ func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) er
 			UserID:            userID,
 			ConversationID:    state.ConversationID,
 			AgentRunID:        state.RunID,
-			ArtifactID:        artifact.ID,
-			ArtifactVersionID: artifact.VersionID,
-			OverallScore:      state.Review.OverallScore,
-			Issues:            state.Review.Issues,
-			ShouldRefine:      state.Review.ShouldRefine,
-			Reviewer:          state.Review.Reviewer,
+			ArtifactID:        review.ArtifactID,
+			ArtifactVersionID: review.VersionID,
+			OverallScore:      review.OverallScore,
+			Issues:            review.Issues,
+			ShouldRefine:      review.ShouldRefine,
+			Reviewer:          coalesce(review.Reviewer, state.Review.Reviewer),
 			MinScore:          minReviewMemoryScore,
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func candidateReviewsForPersistence(state domain.RunState) []domain.CandidateReview {
+	if len(state.Review.CandidateReviews) > 0 {
+		return state.Review.CandidateReviews
+	}
+	reviews := make([]domain.CandidateReview, 0, len(state.Artifacts))
+	for _, artifact := range state.Artifacts {
+		reviews = append(reviews, domain.CandidateReview{
+			ArtifactID:   artifact.ID,
+			VersionID:    artifact.VersionID,
+			ImageRef:     artifact.PreviewURL,
+			OverallScore: state.Review.OverallScore,
+			Issues:       append([]string{}, state.Review.Issues...),
+			ShouldRefine: state.Review.ShouldRefine,
+			Reviewer:     state.Review.Reviewer,
+		})
+	}
+	return reviews
 }
 
 func (svc *Service) idempotentRunResponse(conversation model.Conversation, userID uint, run model.AgentRun) (map[string]interface{}, error) {

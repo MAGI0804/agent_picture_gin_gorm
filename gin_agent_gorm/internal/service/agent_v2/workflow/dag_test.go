@@ -95,6 +95,7 @@ func TestImageGenerationWorkflowIncludesVisionReviewAfterArtifacts(t *testing.T)
 		"image_generation_agent",
 		"artifact_agent",
 		"vision_review_agent",
+		"ranker_agent",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("ordered nodes = %#v, want %#v", got, want)

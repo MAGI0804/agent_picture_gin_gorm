@@ -11,8 +11,10 @@ import (
 )
 
 type fakeImageProvider struct {
-	request tools.ImageGenerationRequest
-	result  tools.ImageGenerationResult
+	request  tools.ImageGenerationRequest
+	requests []tools.ImageGenerationRequest
+	result   tools.ImageGenerationResult
+	results  []tools.ImageGenerationResult
 }
 
 func (provider *fakeImageProvider) GenerateImage(
@@ -20,6 +22,14 @@ func (provider *fakeImageProvider) GenerateImage(
 	request tools.ImageGenerationRequest,
 ) (tools.ImageGenerationResult, error) {
 	provider.request = request
+	provider.requests = append(provider.requests, request)
+	if len(provider.results) > 0 {
+		index := len(provider.requests) - 1
+		if index >= len(provider.results) {
+			index = len(provider.results) - 1
+		}
+		return provider.results[index], nil
+	}
 	return provider.result, nil
 }
 
@@ -293,7 +303,7 @@ func TestImageGenerationAgentUsesRegisteredImageTool(t *testing.T) {
 	}
 	agent := NewImageGenerationAgent(registry, ImageGenerationAgentOptions{
 		ImageModelConfigID: 42,
-		CandidateCount:     2,
+		CandidateCount:     1,
 	})
 
 	result, err := agent.Run(context.Background(), domain.RunState{
@@ -318,8 +328,8 @@ func TestImageGenerationAgentUsesRegisteredImageTool(t *testing.T) {
 	if provider.request.NegativePrompt != "blur" {
 		t.Fatalf("NegativePrompt = %q, want blur", provider.request.NegativePrompt)
 	}
-	if provider.request.CandidateCount != 2 {
-		t.Fatalf("CandidateCount = %d, want 2", provider.request.CandidateCount)
+	if provider.request.CandidateCount != 1 {
+		t.Fatalf("CandidateCount = %d, want 1", provider.request.CandidateCount)
 	}
 	images, ok := result.Output["generated_images"].([]domain.GeneratedImageRef)
 	if !ok {
@@ -327,6 +337,62 @@ func TestImageGenerationAgentUsesRegisteredImageTool(t *testing.T) {
 	}
 	if len(images) != 1 || images[0].ObjectKey != "object-key" {
 		t.Fatalf("generated images = %#v, want object-key", images)
+	}
+}
+
+func TestImageGenerationAgentTopsUpMissingCandidatesWithAdditionalProviderCalls(t *testing.T) {
+	provider := &fakeImageProvider{
+		results: []tools.ImageGenerationResult{
+			{Images: []tools.GeneratedImage{{ObjectKey: "object-key-1"}}},
+			{Images: []tools.GeneratedImage{{ObjectKey: "object-key-2"}}},
+			{Images: []tools.GeneratedImage{{ObjectKey: "object-key-3"}}},
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:                    "image-model",
+		Kind:                    tools.KindImageGeneration,
+		ModelConfigID:           42,
+		ImageGenerationProvider: provider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	agent := NewImageGenerationAgent(registry, ImageGenerationAgentOptions{
+		ImageModelConfigID: 42,
+		CandidateCount:     3,
+	})
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		RunID:          3,
+		UserID:         4,
+		ConversationID: 5,
+		Prompts: domain.PromptBundle{
+			PositivePrompt: "bright product photo",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(provider.requests) != 3 {
+		t.Fatalf("provider calls = %d, want 3", len(provider.requests))
+	}
+	for index, want := range []int{3, 2, 1} {
+		if provider.requests[index].CandidateCount != want {
+			t.Fatalf("request %d candidate count = %d, want %d", index, provider.requests[index].CandidateCount, want)
+		}
+		if provider.requests[index].CandidateStartIndex != index {
+			t.Fatalf("request %d candidate start index = %d, want %d", index, provider.requests[index].CandidateStartIndex, index)
+		}
+	}
+	images, ok := result.Output["generated_images"].([]domain.GeneratedImageRef)
+	if !ok {
+		t.Fatalf("generated_images type = %T, want []domain.GeneratedImageRef", result.Output["generated_images"])
+	}
+	if len(images) != 3 {
+		t.Fatalf("generated images = %#v, want 3 candidates", images)
+	}
+	if images[1].ObjectKey != "object-key-2" || images[2].ObjectKey != "object-key-3" {
+		t.Fatalf("generated images = %#v, want provider outputs in order", images)
 	}
 }
 
@@ -428,5 +494,50 @@ func TestArtifactAgentCreatesArtifactVersionsFromGeneratedImages(t *testing.T) {
 	}
 	if result.Artifacts[0].ID != 10 || result.Artifacts[0].VersionID != 20 {
 		t.Fatalf("artifact refs = %#v, want created artifact and version ids", result.Artifacts)
+	}
+}
+
+func TestArtifactAgentCreatesIndependentVersionsForThreeCandidates(t *testing.T) {
+	writer := &fakeArtifactWriter{}
+	agent := NewArtifactAgent(writer, ArtifactAgentOptions{
+		ModelProvider: "google",
+		ModelName:     "imagen",
+	})
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		RunID:          3,
+		UserID:         4,
+		ConversationID: 5,
+		Requirements: domain.ImageRequirements{
+			AspectRatio: "16:9",
+		},
+		Prompts: domain.PromptBundle{
+			PositivePrompt: "poster",
+		},
+		GeneratedImages: []domain.GeneratedImageRef{
+			{Name: "candidate-1.png", Kind: "image", MimeType: "image/png", ObjectKey: "key-1"},
+			{Name: "candidate-2.png", Kind: "image", MimeType: "image/png", ObjectKey: "key-2"},
+			{Name: "candidate-3.png", Kind: "image", MimeType: "image/png", ObjectKey: "key-3"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(writer.input.Artifacts) != 3 {
+		t.Fatalf("len(writer.input.Artifacts) = %d, want 3", len(writer.input.Artifacts))
+	}
+	if len(result.Artifacts) != 3 {
+		t.Fatalf("len(result.Artifacts) = %d, want 3", len(result.Artifacts))
+	}
+	for index, candidate := range writer.input.Artifacts {
+		if candidate.Artifact.ObjectKey == "" || candidate.Version.ObjectKey == "" {
+			t.Fatalf("candidate %d did not persist artifact and version object keys: %#v", index, candidate)
+		}
+		if candidate.Artifact.ObjectKey != candidate.Version.ObjectKey {
+			t.Fatalf("candidate %d artifact/version object keys differ: %#v", index, candidate)
+		}
+	}
+	if result.Artifacts[1].ID != 11 || result.Artifacts[1].VersionID != 21 {
+		t.Fatalf("second artifact ref = %#v, want independent second artifact/version", result.Artifacts[1])
 	}
 }

@@ -2009,14 +2009,39 @@ p {
   border-color: #28b56d;
 }
 
-.v2-selected-badge {
+.v2-artifact-item.recommended {
+  box-shadow: inset 0 0 0 1px #111111;
+}
+
+.v2-artifact-metrics,
+.v2-artifact-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.v2-artifact-metrics {
+  color: var(--text-muted);
+}
+
+.v2-selected-badge,
+.v2-recommended-badge {
   justify-self: start;
   min-height: 22px;
   border-radius: 4px;
-  background: #ddf8e8;
-  color: #168454;
   padding: 3px 7px;
   font-weight: 800;
+}
+
+.v2-selected-badge {
+  background: #ddf8e8;
+  color: #168454;
+}
+
+.v2-recommended-badge {
+  background: #111111;
+  color: #ffffff;
 }
 
 .v2-artifact-item img,
@@ -2093,7 +2118,7 @@ p {
 
 .v2-score-block {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
 

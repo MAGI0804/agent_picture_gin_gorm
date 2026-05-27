@@ -115,7 +115,7 @@ func (adapter *LegacyProviderAdapter) GenerateImage(
 	images := make([]GeneratedImage, 0, len(files))
 	for index, file := range files {
 		name := safeGeneratedName(file.Name, index)
-		objectKey := generatedObjectKey(request, name)
+		objectKey := generatedObjectKey(request, name, index)
 		stored, err := adapter.store.Save(objectKey, file.Content)
 		if err != nil {
 			return ImageGenerationResult{}, err
@@ -141,7 +141,10 @@ func safeGeneratedName(name string, index int) string {
 	return name
 }
 
-func generatedObjectKey(request ImageGenerationRequest, name string) string {
+func generatedObjectKey(request ImageGenerationRequest, name string, index int) string {
+	if request.CandidateCount > 1 || request.CandidateStartIndex > 0 {
+		name = fmt.Sprintf("candidate-%d-%s", request.CandidateStartIndex+index+1, name)
+	}
 	return path.Join(
 		fmt.Sprintf("user-%d", request.UserID),
 		fmt.Sprintf("conversation-%d", request.ConversationID),

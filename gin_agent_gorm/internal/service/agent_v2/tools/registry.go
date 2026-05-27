@@ -168,17 +168,18 @@ type TextResult struct {
 }
 
 type ImageGenerationRequest struct {
-	UserID         uint
-	ConversationID uint
-	RunID          uint
-	StepID         uint
-	TaskType       string
-	Intent         string
-	Prompt         string
-	NegativePrompt string
-	AspectRatio    string
-	CandidateCount int
-	Temperature    string
+	UserID              uint
+	ConversationID      uint
+	RunID               uint
+	StepID              uint
+	TaskType            string
+	Intent              string
+	Prompt              string
+	NegativePrompt      string
+	AspectRatio         string
+	CandidateCount      int
+	CandidateStartIndex int
+	Temperature         string
 }
 
 type ImageGenerationResult struct {

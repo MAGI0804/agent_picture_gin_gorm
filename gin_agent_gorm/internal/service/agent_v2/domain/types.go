@@ -100,12 +100,26 @@ type ArtifactRef struct {
 	PreviewURL string `json:"preview_url"`
 }
 
-// ReviewResult 审核结果
-type ReviewResult struct {
+// CandidateReview stores per-candidate review and rank metadata.
+type CandidateReview struct {
+	ArtifactID   uint     `json:"artifact_id"`
+	VersionID    uint     `json:"version_id"`
+	ImageRef     string   `json:"image_ref"`
 	OverallScore float64  `json:"overall_score"`
+	RankScore    float64  `json:"rank_score"`
 	Issues       []string `json:"issues"`
 	ShouldRefine bool     `json:"should_refine"`
 	Reviewer     string   `json:"reviewer"`
+	RankReason   string   `json:"rank_reason"`
+}
+
+// ReviewResult 审核结果
+type ReviewResult struct {
+	OverallScore     float64           `json:"overall_score"`
+	Issues           []string          `json:"issues"`
+	ShouldRefine     bool              `json:"should_refine"`
+	Reviewer         string            `json:"reviewer"`
+	CandidateReviews []CandidateReview `json:"candidate_reviews"`
 }
 
 // RunBudget 运行预算配置

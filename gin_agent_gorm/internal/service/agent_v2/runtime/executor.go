@@ -570,7 +570,7 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		state.GeneratedImages = parseGeneratedImages(result.Output["generated_images"])
 	case "artifact_agent":
 		state.Artifacts = append(state.Artifacts, result.Artifacts...)
-	case "vision_review_agent":
+	case "vision_review_agent", "ranker_agent":
 		if score, ok := result.Output["overall_score"].(float64); ok {
 			state.Review.OverallScore = score
 		}
@@ -580,6 +580,9 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		}
 		if reviewer, ok := result.Output["reviewer"].(string); ok {
 			state.Review.Reviewer = reviewer
+		}
+		if candidateReviews := parseCandidateReviews(result.Output["candidate_reviews"]); len(candidateReviews) > 0 {
+			state.Review.CandidateReviews = candidateReviews
 		}
 	}
 	return state
@@ -631,11 +634,90 @@ func parseGeneratedImages(value interface{}) []domain.GeneratedImageRef {
 	}
 }
 
+func parseCandidateReviews(value interface{}) []domain.CandidateReview {
+	switch reviews := value.(type) {
+	case []domain.CandidateReview:
+		return reviews
+	case []interface{}:
+		result := make([]domain.CandidateReview, 0, len(reviews))
+		for _, review := range reviews {
+			if item, ok := review.(domain.CandidateReview); ok {
+				result = append(result, item)
+				continue
+			}
+			if item, ok := review.(map[string]interface{}); ok {
+				result = append(result, domain.CandidateReview{
+					ArtifactID:   uintValue(item["artifact_id"]),
+					VersionID:    uintValue(item["version_id"]),
+					ImageRef:     stringValue(item["image_ref"]),
+					OverallScore: float64Value(item["overall_score"]),
+					RankScore:    float64Value(item["rank_score"]),
+					Issues:       parseIssueList(item["issues"]),
+					ShouldRefine: boolValue(item["should_refine"]),
+					Reviewer:     stringValue(item["reviewer"]),
+					RankReason:   stringValue(item["rank_reason"]),
+				})
+			}
+		}
+		return result
+	default:
+		return []domain.CandidateReview{}
+	}
+}
+
 func stringValue(value interface{}) string {
 	if text, ok := value.(string); ok {
 		return text
 	}
 	return ""
+}
+
+func uintValue(value interface{}) uint {
+	switch number := value.(type) {
+	case uint:
+		return number
+	case int:
+		if number <= 0 {
+			return 0
+		}
+		return uint(number)
+	case int64:
+		if number <= 0 {
+			return 0
+		}
+		return uint(number)
+	case float64:
+		if number <= 0 {
+			return 0
+		}
+		return uint(number)
+	default:
+		return 0
+	}
+}
+
+func float64Value(value interface{}) float64 {
+	switch number := value.(type) {
+	case float64:
+		return number
+	case float32:
+		return float64(number)
+	case int:
+		return float64(number)
+	case int64:
+		return float64(number)
+	case uint:
+		return float64(number)
+	default:
+		return 0
+	}
+}
+
+func boolValue(value interface{}) bool {
+	if flag, ok := value.(bool); ok {
+		return flag
+	}
+	return false
 }
 
 func int64Value(value interface{}) int64 {

@@ -169,6 +169,29 @@ func TestServiceRecordReviewScoresChecksOwnershipAndUpdatesVersions(t *testing.T
 	if want := `"overall_score":0.82`; !strings.Contains(qualityScores, want) {
 		t.Fatalf("quality_scores = %s, want %s", qualityScores, want)
 	}
+	if rankScore, ok := repo.updatedArtifactAttrs["rank_score"].(float64); !ok || rankScore != 0.82 {
+		t.Fatalf("rank_score update = %#v, want 0.82", repo.updatedArtifactAttrs["rank_score"])
+	}
+}
+
+func TestServiceRecordReviewScoresUsesExplicitRankScore(t *testing.T) {
+	repo := &fakeRepository{artifact: model.Artifact{BaseModel: model.BaseModel{ID: 3}, UserID: 7}}
+	svc := NewService(repo)
+
+	err := svc.RecordReviewScores(ReviewScoresInput{
+		UserID:       7,
+		ArtifactID:   3,
+		VersionID:    5,
+		OverallScore: 0.82,
+		RankScore:    0.91,
+		Reviewer:     "ranker_agent",
+	})
+	if err != nil {
+		t.Fatalf("RecordReviewScores() error = %v", err)
+	}
+	if rankScore, ok := repo.updatedArtifactAttrs["rank_score"].(float64); !ok || rankScore != 0.91 {
+		t.Fatalf("rank_score update = %#v, want 0.91", repo.updatedArtifactAttrs["rank_score"])
+	}
 }
 
 type fakeRepository struct {

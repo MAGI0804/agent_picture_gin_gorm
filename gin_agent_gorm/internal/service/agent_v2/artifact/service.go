@@ -58,6 +58,7 @@ type ReviewScoresInput struct {
 	ArtifactID   uint
 	VersionID    uint
 	OverallScore float64
+	RankScore    float64
 	Issues       []string
 	ShouldRefine bool
 	Reviewer     string
@@ -196,8 +197,13 @@ func (svc *Service) RecordReviewScores(input ReviewScoresInput) error {
 	if _, err := svc.repo.FindArtifact(input.UserID, input.ArtifactID); err != nil {
 		return err
 	}
+	rankScore := input.RankScore
+	if rankScore == 0 {
+		rankScore = input.OverallScore
+	}
 	payload := map[string]interface{}{
 		"overall_score": input.OverallScore,
+		"rank_score":    rankScore,
 		"issues":        input.Issues,
 		"should_refine": input.ShouldRefine,
 		"reviewer":      coalesceReviewer(input.Reviewer),
@@ -207,8 +213,13 @@ func (svc *Service) RecordReviewScores(input ReviewScoresInput) error {
 	if err != nil {
 		return err
 	}
-	return svc.repo.UpdateArtifactVersion(input.ArtifactID, input.VersionID, map[string]interface{}{
+	if err := svc.repo.UpdateArtifactVersion(input.ArtifactID, input.VersionID, map[string]interface{}{
 		"quality_scores": string(data),
+	}); err != nil {
+		return err
+	}
+	return svc.repo.UpdateArtifact(input.ArtifactID, map[string]interface{}{
+		"rank_score": rankScore,
 	})
 }
 

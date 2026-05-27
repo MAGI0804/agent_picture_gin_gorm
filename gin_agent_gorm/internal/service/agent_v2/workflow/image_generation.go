@@ -64,5 +64,6 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 			ModelName:     options.ModelName,
 		}),
 		reviewNode,
+		agents.NewRankerAgent(),
 	)
 }
