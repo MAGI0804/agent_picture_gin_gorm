@@ -260,6 +260,29 @@ func (ctrl *AgentController) DownloadArtifact(c *gin.Context) {
 	c.FileAttachment(filePath, agent_svc.SafeDownloadName(artifact.Name))
 }
 
+// PreviewArtifact 内联预览指定产物文件。
+// GET /api/artifacts/:id/preview
+//
+// 路径参数:
+//   - id: 产物 ID
+//
+// 返回: 文件预览流
+func (ctrl *AgentController) PreviewArtifact(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	artifact, filePath, err := agent_svc.NewAgentService().FindArtifact(userID, artifactID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "产物不存在")
+		return
+	}
+	c.Header("Content-Type", artifact.MimeType)
+	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%q", agent_svc.SafeDownloadName(artifact.Name)))
+	c.File(filePath)
+}
+
 // RunEvents 以 SSE（Server-Sent Events）格式返回 Agent Run 的步骤事件。
 // GET /api/runs/:id/events
 //

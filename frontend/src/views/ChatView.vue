@@ -281,7 +281,7 @@
                 :class="['thumbnail-item', { active: index === selectedImageIndex }]"
                 @click="selectedImageIndex = index"
               >
-                <img :src="artifact.preview_url" :alt="artifact.name" />
+                <img :src="previewUrlFor(artifact)" :alt="artifact.name" />
               </div>
             </div>
             
@@ -293,7 +293,7 @@
               </div>
               <img 
                 v-if="imageArtifacts[selectedImageIndex]" 
-                :src="imageArtifacts[selectedImageIndex].preview_url" 
+                :src="previewUrlFor(imageArtifacts[selectedImageIndex])"
                 :alt="imageArtifacts[selectedImageIndex].name" 
                 class="main-image"
               />
@@ -310,8 +310,8 @@
                 <strong>{{ artifact.name }}</strong>
                 <button @click="downloadArtifactFile(artifact)">下载</button>
               </div>
-              <img v-if="artifact.kind === 'image'" :src="artifact.preview_url" :alt="artifact.name" />
-              <iframe v-else-if="artifact.kind === 'html'" :src="artifact.preview_url" :title="artifact.name" />
+              <img v-if="artifact.kind === 'image'" :src="previewUrlFor(artifact)" :alt="artifact.name" />
+              <iframe v-else-if="artifact.kind === 'html'" :src="previewUrlFor(artifact)" :title="artifact.name" />
               <p v-else>{{ artifact.mime_type }}</p>
             </article>
           </template>
@@ -359,7 +359,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { apiFetch, downloadArtifact, getCurrentUser, setCurrentUser, setToken } from '../api'
+import { apiFetch, downloadArtifact, fetchArtifactPreviewURL, getCurrentUser, setCurrentUser, setToken } from '../api'
 import type {
   AgentRun,
   AgentStep,
@@ -419,6 +419,7 @@ const activeConversationId = ref<number | null>(null)
 const messages = ref<Message[]>([])
 const pendingQuestions = ref<FollowUpQuestion[]>([])
 const artifacts = ref<Artifact[]>([])
+const previewURLs = ref<Record<number, string>>({})
 const agentSteps = ref<AgentStep[]>([])
 const activeRunId = ref<number | null>(null)
 const runMetaMap = ref<Record<number, AgentRun>>({})
@@ -527,6 +528,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopResize()
+  revokeAllPreviewURLs()
 })
 
 async function loadModelSelection() {
@@ -604,7 +606,10 @@ async function loadMessages() {
 async function loadArtifacts() {
   if (!activeConversationId.value) return
   const data = await apiFetch<{ artifacts: Artifact[] }>(`/api/conversations/${activeConversationId.value}/artifacts`)
-  artifacts.value = data.artifacts || []
+  const nextArtifacts = data.artifacts || []
+  cleanupPreviewURLs(nextArtifacts)
+  await preloadArtifactPreviews(nextArtifacts)
+  artifacts.value = nextArtifacts
 }
 
 async function sendNormal(useOptimizedPrompt = false) {
@@ -914,6 +919,8 @@ async function applySendResponse(data: SendMessageResponse) {
     appendProcessStep('等待用户补充回答', formatQuestions(pendingQuestions.value), 'completed')
   }
   if (data.artifacts) {
+    cleanupPreviewURLs(data.artifacts)
+    await preloadArtifactPreviews(data.artifacts)
     artifacts.value = data.artifacts
     if (data.artifacts.length) {
       rightTab.value = 'artifacts'
@@ -1146,6 +1153,42 @@ function updateConversationTitle(conversation?: Conversation) {
 
 async function downloadArtifactFile(artifact: Artifact) {
   await downloadArtifact(artifact.id, artifact.name)
+}
+
+async function preloadArtifactPreviews(items: Artifact[]) {
+  await Promise.all(items.filter(item => item.kind === 'image' || item.kind === 'html').map(async item => {
+    if (previewURLs.value[item.id]) return
+    try {
+      const url = await fetchArtifactPreviewURL(item.id)
+      previewURLs.value = { ...previewURLs.value, [item.id]: url }
+    } catch {
+      previewURLs.value = { ...previewURLs.value, [item.id]: '' }
+    }
+  }))
+}
+
+function cleanupPreviewURLs(items: Artifact[]) {
+  const keep = new Set(items.map(item => item.id))
+  const next = { ...previewURLs.value }
+  for (const [id, url] of Object.entries(previewURLs.value)) {
+    if (!keep.has(Number(id))) {
+      if (url) URL.revokeObjectURL(url)
+      delete next[Number(id)]
+    }
+  }
+  previewURLs.value = next
+}
+
+function revokeAllPreviewURLs() {
+  Object.values(previewURLs.value).forEach(url => {
+    if (url) URL.revokeObjectURL(url)
+  })
+  previewURLs.value = {}
+}
+
+function previewUrlFor(artifact?: Artifact) {
+  if (!artifact) return ''
+  return previewURLs.value[artifact.id] || ''
 }
 
 function startResize(side: 'left' | 'right') {

@@ -11,9 +11,10 @@ func init() {
 				"name": config.Get("AIAgent.Provider.Name", "mock"),
 			},
 			"storage": map[string]interface{}{
-				"driver":      config.Get("AIAgent.Storage.Driver", "local"),
-				"local_path":  config.Get("AIAgent.Storage.LocalPath", "public/artifacts"),
-				"public_path": config.Get("AIAgent.Storage.PublicPath", "/artifacts"),
+				"driver":         config.Get("AIAgent.Storage.Driver", "local"),
+				"local_path":     config.Get("AIAgent.Storage.LocalPath", "public/artifacts"),
+				"public_path":    config.Get("AIAgent.Storage.PublicPath", "/artifacts"),
+				"static_enabled": config.Get("AIAgent.Storage.StaticEnabled", false),
 			},
 			"proxy": map[string]interface{}{
 				"enabled": config.Get("AIAgent.Proxy.Enabled", false),

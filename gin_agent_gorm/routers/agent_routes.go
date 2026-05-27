@@ -27,6 +27,7 @@ func registerAgentRoutes(api *gin.RouterGroup) {
 
 		// 产物路由
 		agentGroup.GET("/conversations/:id/artifacts", agentCtrl.ListArtifacts) // GET /api/conversations/:id/artifacts - 获取会话的生成产物列表
+		agentGroup.GET("/artifacts/:id/preview", agentCtrl.PreviewArtifact)     // GET /api/artifacts/:id/preview - 预览指定产物文件
 		agentGroup.GET("/artifacts/:id/download", agentCtrl.DownloadArtifact)   // GET /api/artifacts/:id/download - 下载指定产物文件
 
 		// Agent Run 事件路由

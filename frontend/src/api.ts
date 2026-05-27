@@ -108,6 +108,20 @@ export async function downloadArtifact(id: number, name: string) {
   URL.revokeObjectURL(url)
 }
 
+export async function fetchArtifactPreviewURL(id: number) {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) {
+    headers.set('token', token)
+  }
+  const response = await fetch(`/api/artifacts/${id}/preview`, { headers })
+  if (!response.ok) {
+    throw new Error('预览加载失败')
+  }
+  const blob = await response.blob()
+  return URL.createObjectURL(blob)
+}
+
 export async function downloadV2Artifact(id: number, name: string) {
   const headers = new Headers()
   const token = getToken()
