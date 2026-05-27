@@ -19,12 +19,15 @@ type Repository interface {
 	CreateStep(step *model.AgentStep) error
 	UpdateStep(stepID uint, attrs map[string]interface{}) error
 	UpdateRun(runID uint, attrs map[string]interface{}) error
+	FindRunStatus(runID uint) (string, error)
 }
 
 // Executor 负责推进 workflow：创建 step、执行节点、保存状态、处理失败。
 type Executor struct {
 	repo Repository
 }
+
+var ErrRunCancelled = errors.New("agent v2 run cancelled")
 
 // NewExecutor 创建 workflow 执行器。
 func NewExecutor(repo Repository) *Executor {
@@ -38,6 +41,9 @@ func (executor *Executor) Execute(
 	flow workflow.Workflow,
 ) (domain.RunState, error) {
 	// 第一步：标记 run 开始执行，并记录 workflow 名称和版本。
+	if err := executor.ensureRunNotCancelled(state.RunID); err != nil {
+		return state, err
+	}
 	if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 		"status":           domain.RunStatusRunning,
 		"workflow_name":    flow.Name,
@@ -59,6 +65,9 @@ func (executor *Executor) Execute(
 	}
 
 	for _, node := range nodes {
+		if err := executor.ensureRunNotCancelled(state.RunID); err != nil {
+			return state, err
+		}
 		start := time.Now()
 
 		// 第二步：执行节点前保存输入快照和 input hash，后续用于重试和审计。
@@ -81,6 +90,14 @@ func (executor *Executor) Execute(
 		// 第三步：调用具体 Agent 节点。当前是 mock 节点，后续替换真实 Agent。
 		result, err := node.Run(ctx, state)
 		durationMS := time.Since(start).Milliseconds()
+		if cancelErr := executor.ensureRunNotCancelled(state.RunID); cancelErr != nil {
+			_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
+				"status":        domain.StepStatusCancelled,
+				"error_message": cancelErr.Error(),
+				"duration_ms":   durationMS,
+			})
+			return state, cancelErr
+		}
 		if err != nil {
 			_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
 				"status":        domain.StepStatusFailed,
@@ -120,6 +137,9 @@ func (executor *Executor) Execute(
 	}
 
 	// 第六步：所有节点完成后标记 run 完成。
+	if err := executor.ensureRunNotCancelled(state.RunID); err != nil {
+		return state, err
+	}
 	if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 		"status":       domain.RunStatusCompleted,
 		"completed_at": int(time.Now().Unix()),
@@ -128,6 +148,17 @@ func (executor *Executor) Execute(
 		return state, err
 	}
 	return state, nil
+}
+
+func (executor *Executor) ensureRunNotCancelled(runID uint) error {
+	status, err := executor.repo.FindRunStatus(runID)
+	if err != nil {
+		return err
+	}
+	if status == domain.RunStatusCancelled {
+		return ErrRunCancelled
+	}
+	return nil
 }
 
 // failRun 将 run 标记为失败，并保存错误摘要。

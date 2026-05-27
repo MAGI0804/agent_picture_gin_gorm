@@ -39,6 +39,13 @@ func (dao *AgentV2DAO) FindRun(userID uint, runID uint) (model.AgentRun, error) 
 	return run, err
 }
 
+// FindRunStatus reads only the current run status for executor-side cancellation checks.
+func (dao *AgentV2DAO) FindRunStatus(runID uint) (string, error) {
+	var run model.AgentRun
+	err := database.DB.Select("status").Where("id = ?", runID).First(&run).Error
+	return run.Status, err
+}
+
 // FindRunByIdempotencyKey returns an existing run for a user-supplied idempotency key.
 func (dao *AgentV2DAO) FindRunByIdempotencyKey(userID uint, idempotencyKey string) (model.AgentRun, error) {
 	var run model.AgentRun

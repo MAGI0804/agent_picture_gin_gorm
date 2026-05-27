@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"gin-biz-web-api/internal/dao/agent_v2_dao"
 	"gin-biz-web-api/internal/service/agent_svc"
@@ -361,6 +362,35 @@ func (svc *Service) GetRun(userID uint, runID uint) (map[string]interface{}, err
 	}, nil
 }
 
+// CancelRun marks a queued or running V2 run as cancelled.
+func (svc *Service) CancelRun(userID uint, runID uint) (map[string]interface{}, error) {
+	run, err := svc.dao.FindRun(userID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if !isCancellableRunStatus(run.Status) {
+		return map[string]interface{}{
+			"agent_run": run,
+			"cancelled": run.Status == domain.RunStatusCancelled,
+		}, nil
+	}
+	if err := svc.dao.UpdateRun(run.ID, map[string]interface{}{
+		"status":        domain.RunStatusCancelled,
+		"cancelled_at":  int(time.Now().Unix()),
+		"error_message": "user cancelled run",
+	}); err != nil {
+		return nil, err
+	}
+	run, err = svc.dao.FindRun(userID, runID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"agent_run": run,
+		"cancelled": true,
+	}, nil
+}
+
 // ListRunEvents 读取 SSE 事件源，目前直接复用 step timeline。
 func (svc *Service) ListRunEvents(userID uint, runID uint) ([]model.AgentStep, error) {
 	if _, err := svc.dao.FindRun(userID, runID); err != nil {
@@ -599,6 +629,15 @@ func normalizeCandidateCount(value int) int {
 		return 3
 	}
 	return value
+}
+
+func isCancellableRunStatus(status string) bool {
+	switch status {
+	case domain.RunStatusCreated, domain.RunStatusQueued, domain.RunStatusRunning, domain.RunStatusWaiting:
+		return true
+	default:
+		return false
+	}
 }
 
 func uintToString(value uint) string {

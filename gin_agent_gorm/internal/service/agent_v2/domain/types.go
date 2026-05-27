@@ -19,6 +19,7 @@ const (
 	StepStatusFailed    = "failed"
 	StepStatusSkipped   = "skipped"
 	StepStatusRetrying  = "retrying"
+	StepStatusCancelled = "cancelled"
 )
 
 // RunState 运行状态，包含一次 Agent 运行的完整上下文

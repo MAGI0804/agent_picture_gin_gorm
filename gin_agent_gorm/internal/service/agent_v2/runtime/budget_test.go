@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -39,6 +40,49 @@ func TestExecutorFailsRunWhenStepBudgetExceeded(t *testing.T) {
 	}
 	if repo.lastRunAttrs["status"] != domain.RunStatusFailed {
 		t.Fatalf("run status = %#v, want failed", repo.lastRunAttrs["status"])
+	}
+}
+
+func TestExecutorDoesNotStartCancelledRun(t *testing.T) {
+	repo := &fakeRepository{runStatus: domain.RunStatusCancelled}
+	executor := NewExecutor(repo)
+	flow := workflow.Sequential(
+		"cancel_test",
+		"0.1.0",
+		agents.NewMockAgent("first", "first", map[string]interface{}{}),
+	)
+
+	_, err := executor.Execute(context.Background(), domain.RunState{RunID: 1}, flow)
+	if !errors.Is(err, ErrRunCancelled) {
+		t.Fatalf("Execute() error = %v, want ErrRunCancelled", err)
+	}
+	if len(repo.steps) != 0 {
+		t.Fatalf("created %d steps, want 0", len(repo.steps))
+	}
+	if repo.lastRunAttrs != nil && repo.lastRunAttrs["status"] == domain.RunStatusRunning {
+		t.Fatalf("run was marked running after cancellation: %#v", repo.lastRunAttrs)
+	}
+}
+
+func TestExecutorStopsBeforeNextStepWhenRunCancelled(t *testing.T) {
+	repo := &fakeRepository{cancelAfterFirstStep: true}
+	executor := NewExecutor(repo)
+	flow := workflow.Sequential(
+		"cancel_test",
+		"0.1.0",
+		agents.NewMockAgent("first", "first", map[string]interface{}{}),
+		agents.NewMockAgent("second", "second", map[string]interface{}{}),
+	)
+
+	_, err := executor.Execute(context.Background(), domain.RunState{RunID: 1}, flow)
+	if !errors.Is(err, ErrRunCancelled) {
+		t.Fatalf("Execute() error = %v, want ErrRunCancelled", err)
+	}
+	if len(repo.steps) != 1 {
+		t.Fatalf("created %d steps, want only the first step", len(repo.steps))
+	}
+	if repo.runStatus == domain.RunStatusCompleted {
+		t.Fatal("run status = completed, want cancelled to remain terminal")
 	}
 }
 
@@ -82,8 +126,10 @@ func TestApplyStepResultStoresVisionReviewFromInterfaceIssues(t *testing.T) {
 }
 
 type fakeRepository struct {
-	steps        []model.AgentStep
-	lastRunAttrs map[string]interface{}
+	steps                []model.AgentStep
+	lastRunAttrs         map[string]interface{}
+	runStatus            string
+	cancelAfterFirstStep bool
 }
 
 func (repo *fakeRepository) CreateStep(step *model.AgentStep) error {
@@ -93,10 +139,20 @@ func (repo *fakeRepository) CreateStep(step *model.AgentStep) error {
 }
 
 func (repo *fakeRepository) UpdateStep(stepID uint, attrs map[string]interface{}) error {
+	if repo.cancelAfterFirstStep && stepID == 1 && attrs["status"] == domain.StepStatusCompleted {
+		repo.runStatus = domain.RunStatusCancelled
+	}
 	return nil
 }
 
 func (repo *fakeRepository) UpdateRun(runID uint, attrs map[string]interface{}) error {
 	repo.lastRunAttrs = attrs
+	if status, ok := attrs["status"].(string); ok {
+		repo.runStatus = status
+	}
 	return nil
+}
+
+func (repo *fakeRepository) FindRunStatus(runID uint) (string, error) {
+	return repo.runStatus, nil
 }

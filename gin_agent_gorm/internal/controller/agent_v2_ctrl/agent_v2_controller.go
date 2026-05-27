@@ -77,6 +77,21 @@ func (ctrl *AgentV2Controller) GetRun(c *gin.Context) {
 	responses.New(c).ToResponse(result)
 }
 
+// CancelRun 取消 queued/running 状态的异步 Agent Run。
+func (ctrl *AgentV2Controller) CancelRun(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	runID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	result, err := app.NewService().CancelRun(userID, runID)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "run not found")
+		return
+	}
+	responses.New(c).ToResponse(result)
+}
+
 // RunEvents 获取 Agent 运行的事件流（SSE）
 func (ctrl *AgentV2Controller) RunEvents(c *gin.Context) {
 	userID := auth.CurrentUserID(c)
