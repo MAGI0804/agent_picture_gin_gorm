@@ -145,6 +145,24 @@ func TestRequirementAgentFallsBackOnInvalidProviderJSON(t *testing.T) {
 	}
 }
 
+func TestRequirementAgentAsksClarificationForVagueRequest(t *testing.T) {
+	agent := NewRequirementAgent()
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserRequest: "make an image",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output["need_clarification"] != true {
+		t.Fatalf("need_clarification = %#v, want true", result.Output["need_clarification"])
+	}
+	questions, ok := result.Output["questions"].([]string)
+	if !ok || len(questions) == 0 {
+		t.Fatalf("questions = %#v, want clarification questions", result.Output["questions"])
+	}
+}
+
 func TestPromptAgentUsesTextProviderStructuredJSONAndMemory(t *testing.T) {
 	textProvider := &fakeTextProvider{
 		result: tools.TextResult{

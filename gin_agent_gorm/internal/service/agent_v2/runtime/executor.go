@@ -39,6 +39,7 @@ type Executor struct {
 }
 
 var ErrRunCancelled = errors.New("agent v2 run cancelled")
+var ErrRunWaitingForUser = errors.New("agent v2 run waiting for user input")
 
 const defaultMaxAttempts = 3
 
@@ -125,6 +126,12 @@ func (executor *Executor) Execute(
 			if err := executor.saveState(state); err != nil {
 				_ = executor.failRun(state.RunID, err)
 				return state, err
+			}
+			if executor.shouldWaitForUser(node.Key(), state) {
+				if err := executor.waitRunForUser(state); err != nil {
+					return state, err
+				}
+				return state, ErrRunWaitingForUser
 			}
 			continue
 		}
@@ -265,6 +272,12 @@ func (executor *Executor) Execute(
 				_ = executor.failRun(state.RunID, err)
 				return state, err
 			}
+			if executor.shouldWaitForUser(node.Key(), state) {
+				if err := executor.waitRunForUser(state); err != nil {
+					return state, err
+				}
+				return state, ErrRunWaitingForUser
+			}
 			completed = true
 			break
 		}
@@ -366,6 +379,22 @@ func (executor *Executor) saveState(state domain.RunState) error {
 		"state_json": mustJSON(state),
 		"task_type":  state.TaskType,
 		"intent":     state.Intent,
+	})
+}
+
+func (executor *Executor) shouldWaitForUser(nodeKey string, state domain.RunState) bool {
+	return nodeKey == "requirement_agent" &&
+		state.Requirements.NeedClarification &&
+		len(state.Requirements.Questions) > 0
+}
+
+func (executor *Executor) waitRunForUser(state domain.RunState) error {
+	return executor.repo.UpdateRun(state.RunID, map[string]interface{}{
+		"status":        domain.RunStatusWaiting,
+		"state_json":    mustJSON(state),
+		"task_type":     state.TaskType,
+		"intent":        state.Intent,
+		"error_message": "",
 	})
 }
 

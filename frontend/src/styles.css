@@ -1801,7 +1801,7 @@ p {
 
 .v2-main {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   border-right: 1px solid var(--line);
   background: #ffffff;
 }
@@ -1859,6 +1859,45 @@ p {
   resize: vertical;
 }
 
+.v2-clarification {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #fffaf2;
+}
+
+.v2-clarification header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.v2-clarification header strong {
+  color: var(--accent);
+}
+
+.v2-clarification header span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.v2-clarification ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: #2f2f2f;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.v2-clarification textarea {
+  min-height: 92px;
+  resize: vertical;
+}
+
 .v2-actions {
   display: flex;
   gap: 10px;
@@ -1872,6 +1911,7 @@ p {
 }
 
 .v2-timeline {
+  grid-row: 4;
   min-height: 0;
   overflow: auto;
   padding: 18px;

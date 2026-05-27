@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	"gin-biz-web-api/internal/service/agent_v2/domain"
@@ -49,6 +50,34 @@ func TestMetadataUintParsesModelConfigID(t *testing.T) {
 
 	if got != 6 {
 		t.Fatalf("metadataUint() = %d, want 6", got)
+	}
+}
+
+func TestMergeClarificationAnswerAppendsAnswerAndClearsWaitingState(t *testing.T) {
+	state := domain.RunState{
+		UserRequest: "make a product poster",
+		Requirements: domain.ImageRequirements{
+			NeedClarification: true,
+			Questions:         []string{"Which product should be featured?"},
+		},
+	}
+
+	merged := mergeClarificationAnswer(state, "Feature the cold brew bottle.", 123)
+
+	if merged.Requirements.NeedClarification {
+		t.Fatal("NeedClarification = true, want false after answer")
+	}
+	if len(merged.Requirements.Questions) != 0 {
+		t.Fatalf("Questions = %#v, want cleared", merged.Requirements.Questions)
+	}
+	if !strings.Contains(merged.UserRequest, "Feature the cold brew bottle.") {
+		t.Fatalf("UserRequest = %q, want appended answer", merged.UserRequest)
+	}
+	if len(merged.Clarifications) != 1 || merged.Clarifications[0].Answer != "Feature the cold brew bottle." {
+		t.Fatalf("Clarifications = %#v, want recorded clarification", merged.Clarifications)
+	}
+	if merged.Clarifications[0].CreatedAt != 123 {
+		t.Fatalf("CreatedAt = %d, want 123", merged.Clarifications[0].CreatedAt)
 	}
 }
 

@@ -48,6 +48,11 @@ type CreateRunRequest struct {
 	CandidateCount     int    `json:"candidate_count" form:"candidate_count"`
 }
 
+// ResumeRunRequest carries the user's clarification answer for a waiting run.
+type ResumeRunRequest struct {
+	Content string `json:"content" form:"content" binding:"required"`
+}
+
 // MemorySearchRequest 是 V2 记忆查询请求。
 type MemorySearchRequest struct {
 	ConversationID uint   `json:"conversation_id" form:"conversation_id"`
@@ -334,6 +339,16 @@ func (svc *Service) createRun(
 		steps, _ := svc.dao.ListSteps(userID, run.ID)
 		ledgerItems, _ := svc.dao.ListTaskLedgerItems(run.ID)
 		toolInvocations, _ := svc.dao.ListToolInvocationsByRun(userID, run.ID)
+		if errors.Is(err, runtime.ErrRunWaitingForUser) {
+			run, _ = svc.dao.FindRun(userID, run.ID)
+			return map[string]interface{}{
+				"agent_run":         run,
+				"steps":             steps,
+				"task_ledger_items": ledgerItems,
+				"tool_invocations":  toolInvocations,
+				"state":             finalState,
+			}, nil
+		}
 		return map[string]interface{}{
 			"agent_run":         run,
 			"steps":             steps,
@@ -457,6 +472,79 @@ func (svc *Service) CancelRun(userID uint, runID uint) (map[string]interface{}, 
 	return map[string]interface{}{
 		"agent_run": run,
 		"cancelled": true,
+	}, nil
+}
+
+// ResumeRun records a clarification answer and requeues the same waiting run.
+func (svc *Service) ResumeRun(
+	ctx context.Context,
+	userID uint,
+	runID uint,
+	request ResumeRunRequest,
+) (map[string]interface{}, error) {
+	answer := strings.TrimSpace(request.Content)
+	if answer == "" {
+		return nil, errors.New("clarification answer is required")
+	}
+	run, err := svc.dao.FindRun(userID, runID)
+	if err != nil {
+		return nil, err
+	}
+	if run.Status != domain.RunStatusWaiting {
+		return nil, fmt.Errorf("run %d is not waiting for user input", run.ID)
+	}
+	state := mergeClarificationAnswer(queuedRunState(run), answer, int(time.Now().Unix()))
+	message := model.Message{
+		ConversationID: run.ConversationID,
+		UserID:         userID,
+		Role:           "user",
+		InputType:      "answer_to_questions",
+		Content:        answer,
+		AgentRunID:     run.ID,
+	}
+	if err := svc.dao.CreateMessage(&message); err != nil {
+		return nil, err
+	}
+	if err := svc.dao.UpdateRun(run.ID, map[string]interface{}{
+		"status":        domain.RunStatusQueued,
+		"state_json":    mustJSON(state),
+		"error_message": "",
+		"completed_at":  0,
+		"cancelled_at":  0,
+	}); err != nil {
+		return nil, err
+	}
+	if svc.runQueue == nil {
+		err := errors.New("agent v2 run queue is not configured")
+		_ = svc.dao.UpdateRun(run.ID, map[string]interface{}{
+			"status":        domain.RunStatusFailed,
+			"error_message": err.Error(),
+		})
+		return nil, err
+	}
+	if err := svc.runQueue.EnqueueAgentRun(ctx, AgentRunQueuePayload{
+		RunID:          run.ID,
+		UserID:         userID,
+		ConversationID: run.ConversationID,
+	}); err != nil {
+		_ = svc.dao.UpdateRun(run.ID, map[string]interface{}{
+			"status":        domain.RunStatusFailed,
+			"error_message": err.Error(),
+		})
+		return nil, err
+	}
+	run, _ = svc.dao.FindRun(userID, run.ID)
+	steps, _ := svc.dao.ListSteps(userID, run.ID)
+	ledgerItems, _ := svc.dao.ListTaskLedgerItems(run.ID)
+	toolInvocations, _ := svc.dao.ListToolInvocationsByRun(userID, run.ID)
+	return map[string]interface{}{
+		"agent_run":         run,
+		"user_message":      message,
+		"steps":             steps,
+		"task_ledger_items": ledgerItems,
+		"tool_invocations":  toolInvocations,
+		"state":             state,
+		"queued":            true,
 	}, nil
 }
 
@@ -745,6 +833,46 @@ func publicArtifacts(artifacts []model.Artifact) []model.Artifact {
 		result[index].ObjectKey = ""
 		if result[index].ID != 0 {
 			result[index].PreviewURL = fmt.Sprintf("/api/v2/artifacts/%d/preview", result[index].ID)
+		}
+	}
+	return result
+}
+
+func mergeClarificationAnswer(state domain.RunState, answer string, createdAt int) domain.RunState {
+	answer = strings.TrimSpace(answer)
+	questions := append([]string{}, state.Requirements.Questions...)
+	state.Clarifications = append(state.Clarifications, domain.ClarificationTurn{
+		Questions: questions,
+		Answer:    answer,
+		CreatedAt: createdAt,
+	})
+	state.UserRequest = appendClarificationToRequest(state.UserRequest, questions, answer)
+	state.Requirements.NeedClarification = false
+	state.Requirements.Questions = []string{}
+	return state
+}
+
+func appendClarificationToRequest(userRequest string, questions []string, answer string) string {
+	parts := []string{strings.TrimSpace(userRequest), "Clarification:"}
+	for _, question := range questions {
+		question = strings.TrimSpace(question)
+		if question != "" {
+			parts = append(parts, "- "+question)
+		}
+	}
+	answer = strings.TrimSpace(answer)
+	if answer != "" {
+		parts = append(parts, "Answer: "+answer)
+	}
+	return strings.Join(nonEmptyStrings(parts), "\n")
+}
+
+func nonEmptyStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result = append(result, value)
 		}
 	}
 	return result

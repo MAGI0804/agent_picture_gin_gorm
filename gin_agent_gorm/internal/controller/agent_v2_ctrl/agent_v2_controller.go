@@ -292,3 +292,23 @@ func (ctrl *AgentV2Controller) parseID(c *gin.Context, key string) (uint, bool) 
 	}
 	return uint(id), true
 }
+
+// ResumeRun submits a clarification answer and requeues the same Agent V2 run.
+func (ctrl *AgentV2Controller) ResumeRun(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	runID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.ResumeRunRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	result, err := app.NewService().ResumeRun(c.Request.Context(), userID, runID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(result)
+}

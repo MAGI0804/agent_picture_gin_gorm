@@ -138,6 +138,41 @@ func TestExecutorRetriesRetryableProviderError(t *testing.T) {
 	}
 }
 
+func TestExecutorPausesWhenRequirementNeedsClarification(t *testing.T) {
+	promptNode := &countingNode{
+		key:     "prompt_agent",
+		summary: "should not run",
+	}
+	repo := &fakeRepository{}
+	executor := NewExecutor(repo)
+
+	state, err := executor.Execute(context.Background(), domain.RunState{RunID: 1}, workflow.Sequential(
+		"clarification_test",
+		"0.1.0",
+		agents.NewMockAgent("requirement_agent", "needs clarification", map[string]interface{}{
+			"subject":            "poster",
+			"need_clarification": true,
+			"questions":          []string{"What product should be featured?"},
+		}),
+		promptNode,
+	))
+	if !errors.Is(err, ErrRunWaitingForUser) {
+		t.Fatalf("Execute() error = %v, want ErrRunWaitingForUser", err)
+	}
+	if promptNode.calls != 0 {
+		t.Fatalf("prompt node calls = %d, want 0 while waiting for user", promptNode.calls)
+	}
+	if repo.runStatus != domain.RunStatusWaiting {
+		t.Fatalf("run status = %q, want waiting_user", repo.runStatus)
+	}
+	if len(repo.steps) != 1 || repo.steps[0].StepKey != "requirement_agent" || repo.steps[0].Status != domain.StepStatusCompleted {
+		t.Fatalf("steps = %#v, want only completed requirement step", repo.steps)
+	}
+	if !state.Requirements.NeedClarification || len(state.Requirements.Questions) != 1 {
+		t.Fatalf("requirements = %#v, want clarification questions preserved", state.Requirements)
+	}
+}
+
 func TestExecutorDoesNotRetryBusinessError(t *testing.T) {
 	node := &flakyNode{
 		key:      "business_node",

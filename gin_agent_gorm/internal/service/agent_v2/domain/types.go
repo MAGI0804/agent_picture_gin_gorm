@@ -39,6 +39,7 @@ type RunState struct {
 	Review          ReviewResult        `json:"review"`
 	Budget          RunBudget           `json:"budget"`
 	Metadata        map[string]string   `json:"metadata"`
+	Clarifications  []ClarificationTurn `json:"clarifications,omitempty"`
 }
 
 // ImageRequirements 图片需求配置
@@ -63,6 +64,13 @@ type MemoryItem struct {
 	Kind       string  `json:"kind"`
 	Content    string  `json:"content"`
 	Confidence float64 `json:"confidence"`
+}
+
+// ClarificationTurn records one human answer used to resume a waiting run.
+type ClarificationTurn struct {
+	Questions []string `json:"questions"`
+	Answer    string   `json:"answer"`
+	CreatedAt int      `json:"created_at"`
 }
 
 // PromptBundle 提示词包

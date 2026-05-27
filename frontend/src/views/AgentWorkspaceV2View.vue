@@ -89,6 +89,27 @@
         </div>
       </section>
 
+      <section v-if="activeRun?.status === 'waiting_user'" class="v2-clarification">
+        <header>
+          <strong>需要补充信息</strong>
+          <span>Run #{{ activeRun.id }}</span>
+        </header>
+        <ul v-if="clarificationQuestions.length">
+          <li v-for="question in clarificationQuestions" :key="question">{{ question }}</li>
+        </ul>
+        <p v-else class="muted">当前运行需要补充说明后才能继续。</p>
+        <textarea
+          v-model="clarificationAnswer"
+          placeholder="补充回答后，系统会继续推进同一个 run。"
+          @keydown.enter.ctrl.prevent="resumeActiveRun"
+        />
+        <div class="v2-actions">
+          <button class="primary" type="button" :disabled="!canResumeRun" @click="resumeActiveRun">
+            {{ resumingRun ? '继续中...' : '提交补充并继续' }}
+          </button>
+        </div>
+      </section>
+
       <section class="v2-timeline">
         <header>
           <strong>Timeline</strong>
@@ -315,6 +336,8 @@ const memoryNamespace = ref('')
 const memoryLoading = ref(false)
 const promotingMemoryId = ref(0)
 const runPollTimer = ref<ReturnType<typeof window.setInterval> | null>(null)
+const clarificationAnswer = ref('')
+const resumingRun = ref(false)
 
 interface QualityScores {
   overall_score?: number
@@ -324,11 +347,21 @@ interface QualityScores {
   reviewed_at?: number
 }
 
+interface StepResultSnapshot {
+  output?: {
+    questions?: unknown
+  }
+}
+
 const activeRunId = computed(() => activeRun.value?.id || 0)
 const canRun = computed(() => Boolean(prompt.value.trim() && activeConversationId.value && !running.value))
 const canCancelRun = computed(() => {
   const status = activeRun.value?.status || ''
   return ['created', 'queued', 'running', 'waiting_user'].includes(status)
+})
+const clarificationQuestions = computed(() => extractClarificationQuestions())
+const canResumeRun = computed(() => {
+  return activeRun.value?.status === 'waiting_user' && Boolean(clarificationAnswer.value.trim()) && !resumingRun.value
 })
 const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
@@ -350,6 +383,7 @@ const runStatusText = computed(() => {
     created: '已创建',
     queued: '排队中',
     running: '运行中',
+    waiting_user: '等待补充信息',
     completed: '已完成',
     failed: '失败',
     cancelled: '已取消'
@@ -400,6 +434,7 @@ async function openConversation(id: number) {
   toolInvocations.value = []
   selectedArtifact.value = null
   versions.value = []
+  clarificationAnswer.value = ''
   await Promise.all([loadArtifacts(), loadMemories()])
 }
 
@@ -410,6 +445,7 @@ async function runAgent() {
   steps.value = []
   taskLedgerItems.value = []
   toolInvocations.value = []
+  clarificationAnswer.value = ''
   try {
     const data = await apiFetch<AgentV2RunResponse>(`/api/v2/conversations/${activeConversationId.value}/runs/async`, {
       method: 'POST',
@@ -460,6 +496,31 @@ async function refreshRun() {
     clearRunPolling()
     await loadArtifacts()
     await loadMemories()
+  } else if (data.agent_run.status === 'waiting_user') {
+    clearRunPolling()
+  }
+}
+
+async function resumeActiveRun() {
+  if (!activeRunId.value || !canResumeRun.value) return
+  resumingRun.value = true
+  errorMessage.value = ''
+  try {
+    const data = await apiFetch<AgentV2RunResponse>(`/api/v2/runs/${activeRunId.value}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({
+        content: clarificationAnswer.value.trim()
+      })
+    })
+    clarificationAnswer.value = ''
+    await applyRunResponse(data)
+    if (data.agent_run?.id && ['created', 'queued', 'running'].includes(data.agent_run.status)) {
+      startRunPolling(data.agent_run.id)
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '继续运行失败'
+  } finally {
+    resumingRun.value = false
   }
 }
 
@@ -648,6 +709,21 @@ function clearRunPolling() {
 
 function isTerminalRunStatus(status: string) {
   return ['completed', 'failed', 'cancelled'].includes(status)
+}
+
+function extractClarificationQuestions() {
+  const requirementStep = [...steps.value]
+    .reverse()
+    .find(step => step.step_key === 'requirement_agent' || step.name === 'requirement_agent')
+  if (!requirementStep?.output_json) return []
+  try {
+    const payload = JSON.parse(requirementStep.output_json) as StepResultSnapshot
+    const questions = payload.output?.questions
+    if (!Array.isArray(questions)) return []
+    return questions.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+  } catch {
+    return []
+  }
 }
 
 function parseQualityScores(raw?: string): QualityScores | null {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"gin-biz-web-api/internal/service/agent_v2/domain"
+	"gin-biz-web-api/internal/service/agent_v2/runtime"
 	"gin-biz-web-api/internal/service/agent_v2/tools"
 	"gin-biz-web-api/internal/service/agent_v2/workflow"
 	"gin-biz-web-api/model"
@@ -63,6 +64,9 @@ func (svc *Service) ExecuteQueuedRun(ctx context.Context, payload AgentRunQueueP
 		return err
 	}
 	_, _, err = svc.executePreparedRun(ctx, payload.UserID, conversation, run, state, flow)
+	if errors.Is(err, runtime.ErrRunWaitingForUser) {
+		return nil
+	}
 	return err
 }
 

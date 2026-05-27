@@ -470,14 +470,15 @@ func fallbackRequirementResult(state domain.RunState, schemaIssue string) domain
 		textPolicy = "render text separately"
 		layoutHints = append(layoutHints, "reserve clean space for text overlay")
 	}
+	questions := inferClarificationQuestions(userRequest)
 	requirements := domain.ImageRequirements{
 		Subject:           truncateRunes(userRequest, 120),
 		Style:             inferStyle(userRequest),
 		AspectRatio:       inferAspectRatio(userRequest),
 		MustInclude:       []string{truncateRunes(userRequest, 80)},
 		MustAvoid:         []string{"blur", "watermark", "distorted text", "low quality"},
-		NeedClarification: false,
-		Questions:         []string{},
+		NeedClarification: len(questions) > 0,
+		Questions:         questions,
 		Scene:             truncateRunes(userRequest, 160),
 		Composition:       "clear subject, balanced lighting, production-ready detail",
 		TextPolicy:        textPolicy,
@@ -561,6 +562,9 @@ func parseRequirementJSON(raw string, userRequest string) (domain.ImageRequireme
 	if requirements.TargetUse == "" {
 		requirements.TargetUse = inferTargetUse(userRequest)
 	}
+	if requirements.NeedClarification && len(requirements.Questions) == 0 {
+		requirements.Questions = defaultClarificationQuestions()
+	}
 	return requirements, nil
 }
 
@@ -622,9 +626,10 @@ func requirementAgentSystemPrompt() string {
 
 func requirementAgentPrompt(state domain.RunState) string {
 	return marshalPromptPayload(map[string]interface{}{
-		"user_request": state.UserRequest,
-		"task_type":    state.TaskType,
-		"intent":       state.Intent,
+		"user_request":   state.UserRequest,
+		"task_type":      state.TaskType,
+		"intent":         state.Intent,
+		"clarifications": state.Clarifications,
 	})
 }
 
@@ -789,6 +794,37 @@ func inferTargetUse(text string) string {
 		return "avatar"
 	default:
 		return "general image generation"
+	}
+}
+
+func inferClarificationQuestions(text string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return defaultClarificationQuestions()
+	}
+	vagueRequests := []string{
+		"make an image",
+		"generate an image",
+		"draw a picture",
+		"做一张图",
+		"生成图片",
+		"随便做",
+	}
+	for _, request := range vagueRequests {
+		if normalized == request {
+			return defaultClarificationQuestions()
+		}
+	}
+	if len([]rune(normalized)) < 8 || len(strings.Fields(normalized)) <= 2 {
+		return defaultClarificationQuestions()
+	}
+	return []string{}
+}
+
+func defaultClarificationQuestions() []string {
+	return []string{
+		"What subject should the image feature?",
+		"What style, use case, or layout should it target?",
 	}
 }
 

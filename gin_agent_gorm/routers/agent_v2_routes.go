@@ -18,6 +18,7 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 		group.GET("/conversations/:id/artifacts", ctrl.ListArtifacts)
 		group.GET("/runs/:id", ctrl.GetRun)
 		group.POST("/runs/:id/cancel", ctrl.CancelRun)
+		group.POST("/runs/:id/resume", ctrl.ResumeRun)
 		group.GET("/runs/:id/events", ctrl.RunEvents)
 		group.GET("/memories", ctrl.SearchMemories)
 		group.POST("/memories/search", ctrl.SearchMemories)
