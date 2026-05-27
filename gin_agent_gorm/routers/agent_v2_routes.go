@@ -16,6 +16,7 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 		group.POST("/conversations/:id/runs", ctrl.CreateRun)
 		group.POST("/conversations/:id/runs/async", ctrl.CreateRunAsync)
 		group.GET("/conversations/:id/artifacts", ctrl.ListArtifacts)
+		group.POST("/conversations/:id/artifacts/upload", ctrl.UploadArtifact)
 		group.GET("/runs/:id", ctrl.GetRun)
 		group.POST("/runs/:id/cancel", ctrl.CancelRun)
 		group.POST("/runs/:id/resume", ctrl.ResumeRun)
@@ -28,6 +29,7 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 		group.GET("/artifacts/:id/versions", ctrl.ListArtifactVersions)
 		group.GET("/artifacts/:id/preview", ctrl.PreviewArtifact)
 		group.GET("/artifacts/:id/download", ctrl.DownloadArtifact)
+		group.POST("/artifacts/:id/edit", ctrl.EditArtifact)
 		group.POST("/artifacts/:id/feedback", ctrl.RecordArtifactFeedback)
 		group.POST("/artifacts/:id/select", ctrl.SelectArtifact)
 	}

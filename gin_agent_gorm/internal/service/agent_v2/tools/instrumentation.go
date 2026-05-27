@@ -28,6 +28,9 @@ func InstrumentTool(tool Tool, store InvocationStore) Tool {
 	if tool.ImageGenerationProvider != nil {
 		tool.ImageGenerationProvider = instrumentedImageGenerationProvider{tool: tool, store: store, next: tool.ImageGenerationProvider}
 	}
+	if tool.ImageEditProvider != nil {
+		tool.ImageEditProvider = instrumentedImageEditProvider{tool: tool, store: store, next: tool.ImageEditProvider}
+	}
 	if tool.VisionProvider != nil {
 		tool.VisionProvider = instrumentedVisionProvider{tool: tool, store: store, next: tool.VisionProvider}
 	}
@@ -83,6 +86,23 @@ type instrumentedVisionProvider struct {
 	tool  Tool
 	store InvocationStore
 	next  VisionProvider
+}
+
+type instrumentedImageEditProvider struct {
+	tool  Tool
+	store InvocationStore
+	next  ImageEditProvider
+}
+
+func (provider instrumentedImageEditProvider) EditImage(ctx context.Context, request ImageEditRequest) (ImageEditResult, error) {
+	startedAt := time.Now()
+	invocation, startErr := startInvocation(provider.store, provider.tool, request.UserID, request.RunID, request.StepID, imageEditInputSummary(request), startedAt)
+	if startErr != nil {
+		return ImageEditResult{}, startErr
+	}
+	result, err := provider.next.EditImage(ctx, request)
+	finishInvocation(provider.store, invocation.ID, startedAt, imageEditOutputSummary(result), provider.tool.Capability.CostPolicy, err)
+	return result, err
 }
 
 func (provider instrumentedVisionProvider) AnalyzeImage(ctx context.Context, request VisionRequest) (VisionResult, error) {
@@ -194,6 +214,20 @@ func imageOutputSummary(result ImageGenerationResult) map[string]interface{} {
 		"image_count": len(result.Images),
 		"images":      images,
 	}
+}
+
+func imageEditInputSummary(request ImageEditRequest) map[string]interface{} {
+	return map[string]interface{}{
+		"prompt":           request.Prompt,
+		"image_ref_count":  len(request.ImageRefs),
+		"mask_ref_present": strings.TrimSpace(request.MaskRef) != "",
+		"candidate_count":  request.CandidateCount,
+		"task_type":        request.TaskType,
+	}
+}
+
+func imageEditOutputSummary(result ImageEditResult) map[string]interface{} {
+	return imageOutputSummary(ImageGenerationResult{Images: result.Images})
 }
 
 func visionInputSummary(request VisionRequest) map[string]interface{} {

@@ -3,6 +3,7 @@ package agent_v2_ctrl
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -236,6 +237,37 @@ func (ctrl *AgentV2Controller) ListArtifacts(c *gin.Context) {
 	responses.New(c).ToResponse(gin.H{"artifacts": artifacts})
 }
 
+// UploadArtifact stores a user uploaded image as a V2 artifact/version.
+func (ctrl *AgentV2Controller) UploadArtifact(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	conversationID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "upload file is required")
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, app.MaxImageUploadBytes+1))
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "read upload file failed")
+		return
+	}
+	artifact, version, err := app.NewService().UploadArtifact(userID, app.UploadArtifactInput{
+		ConversationID: conversationID,
+		FileName:       header.Filename,
+		ContentType:    header.Header.Get("Content-Type"),
+		Content:        content,
+	})
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"artifact": artifact, "version": version})
+}
+
 // ListArtifactVersions 列出当前用户有权访问的产物版本。
 func (ctrl *AgentV2Controller) ListArtifactVersions(c *gin.Context) {
 	userID := auth.CurrentUserID(c)
@@ -249,6 +281,26 @@ func (ctrl *AgentV2Controller) ListArtifactVersions(c *gin.Context) {
 		return
 	}
 	responses.New(c).ToResponse(gin.H{"versions": versions})
+}
+
+// EditArtifact appends a provider-generated edit as a child artifact version.
+func (ctrl *AgentV2Controller) EditArtifact(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.EditArtifactRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	version, err := app.NewService().EditArtifact(c.Request.Context(), userID, artifactID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"version": version})
 }
 
 // DownloadArtifact 下载当前用户有权访问的 V2 产物。

@@ -141,6 +141,16 @@
         <button type="button" :disabled="!activeConversationId" @click="loadArtifacts">刷新</button>
       </header>
 
+      <section class="v2-upload-panel">
+        <label>
+          上传参考图
+          <input type="file" accept="image/png,image/jpeg,image/gif" @change="handleUploadFile" />
+        </label>
+        <button type="button" :disabled="!canUploadArtifact" @click="uploadArtifact">
+          {{ uploadingArtifact ? '上传中...' : '上传为产物' }}
+        </button>
+      </section>
+
       <section class="v2-artifact-grid">
         <button
           v-for="(artifact, index) in rankedArtifacts"
@@ -203,6 +213,20 @@
           <small>{{ version.model_provider }}/{{ version.model_name }}</small>
           <small v-if="version.parent_version_id">parent v{{ version.parent_version_id }}</small>
           <small v-if="version.quality_scores">score {{ formatScore(parseQualityScores(version.quality_scores)?.overall_score) }}</small>
+        </button>
+      </section>
+
+      <section v-if="selectedArtifact" class="v2-edit-panel">
+        <label>
+          编辑 Prompt
+          <textarea
+            v-model="editPrompt"
+            placeholder="描述要基于当前版本继续修改的内容。"
+            @keydown.enter.ctrl.prevent="editSelectedArtifact"
+          />
+        </label>
+        <button type="button" :disabled="!canEditArtifact" @click="editSelectedArtifact">
+          {{ editingArtifact ? '编辑中...' : '继续编辑' }}
         </button>
       </section>
 
@@ -372,6 +396,10 @@ const artifacts = ref<Artifact[]>([])
 const selectedArtifact = ref<Artifact | null>(null)
 const versions = ref<ArtifactVersion[]>([])
 const selectedVersionId = ref(0)
+const uploadFile = ref<File | null>(null)
+const uploadingArtifact = ref(false)
+const editPrompt = ref('')
+const editingArtifact = ref(false)
 const feedbackType = ref('selected')
 const rating = ref(0)
 const feedbackComment = ref('')
@@ -417,6 +445,8 @@ const clarificationQuestions = computed(() => extractClarificationQuestions())
 const canResumeRun = computed(() => {
   return activeRun.value?.status === 'waiting_user' && Boolean(clarificationAnswer.value.trim()) && !resumingRun.value
 })
+const canUploadArtifact = computed(() => Boolean(activeConversationId.value && uploadFile.value && !uploadingArtifact.value))
+const canEditArtifact = computed(() => Boolean(selectedArtifact.value && selectedVersionId.value && editPrompt.value.trim() && !editingArtifact.value))
 const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
 const rankedArtifacts = computed(() => {
@@ -639,6 +669,62 @@ async function selectArtifact(artifact: Artifact) {
 async function downloadSelected() {
   if (!selectedArtifact.value) return
   await downloadV2Artifact(selectedArtifact.value.id, selectedArtifact.value.name)
+}
+
+function handleUploadFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  uploadFile.value = input.files?.[0] || null
+}
+
+async function uploadArtifact() {
+  if (!activeConversationId.value || !uploadFile.value || uploadingArtifact.value) return
+  uploadingArtifact.value = true
+  errorMessage.value = ''
+  try {
+    const form = new FormData()
+    form.set('file', uploadFile.value)
+    const data = await apiFetch<{ artifact: Artifact; version: ArtifactVersion }>(
+      `/api/v2/conversations/${activeConversationId.value}/artifacts/upload`,
+      { method: 'POST', body: form }
+    )
+    uploadFile.value = null
+    await loadArtifacts()
+    const current = artifacts.value.find(item => item.id === data.artifact.id) || data.artifact
+    await selectArtifact(current)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '上传图片失败'
+  } finally {
+    uploadingArtifact.value = false
+  }
+}
+
+async function editSelectedArtifact() {
+  if (!selectedArtifact.value || !selectedVersionId.value || editingArtifact.value) return
+  const promptText = editPrompt.value.trim()
+  if (!promptText) return
+  editingArtifact.value = true
+  errorMessage.value = ''
+  try {
+    await apiFetch<{ version: ArtifactVersion }>(`/api/v2/artifacts/${selectedArtifact.value.id}/edit`, {
+      method: 'POST',
+      body: JSON.stringify({
+        artifact_version_id: selectedVersionId.value,
+        prompt: promptText,
+        image_model_config_id: imageModelConfigId.value
+      })
+    })
+    editPrompt.value = ''
+    const artifactID = selectedArtifact.value.id
+    await loadArtifacts()
+    const current = artifacts.value.find(item => item.id === artifactID)
+    if (current) {
+      await selectArtifact(current)
+    }
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '编辑图片失败'
+  } finally {
+    editingArtifact.value = false
+  }
 }
 
 async function markSelected() {

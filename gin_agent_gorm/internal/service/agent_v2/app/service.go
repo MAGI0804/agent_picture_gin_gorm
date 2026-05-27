@@ -1,10 +1,20 @@
 package app
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"net/http"
+	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,6 +37,10 @@ const (
 	maxIdempotencyKeyLength = 128
 	minReviewMemoryScore    = 0.70
 	defaultRunMaxToolCalls  = 16
+
+	// MaxImageUploadBytes bounds V2 reference/edit image uploads before decoding.
+	MaxImageUploadBytes  = int64(10 << 20)
+	maxImageUploadPixels = 36_000_000
 )
 
 // Service 是 Agent V2 的应用服务层，负责把 HTTP 请求编排成一次 Agent Run。
@@ -86,6 +100,21 @@ type ArtifactFeedbackRequest struct {
 	FeedbackType      string `json:"feedback_type" form:"feedback_type" binding:"required"`
 	Rating            int    `json:"rating" form:"rating"`
 	Comment           string `json:"comment" form:"comment"`
+}
+
+// UploadArtifactInput carries a user uploaded reference or edit source image.
+type UploadArtifactInput struct {
+	ConversationID uint
+	FileName       string
+	ContentType    string
+	Content        []byte
+}
+
+// EditArtifactRequest appends an edited image version to an existing artifact.
+type EditArtifactRequest struct {
+	ArtifactVersionID  uint   `json:"artifact_version_id" form:"artifact_version_id"`
+	Prompt             string `json:"prompt" form:"prompt" binding:"required"`
+	ImageModelConfigID uint   `json:"image_model_config_id" form:"image_model_config_id"`
 }
 
 // RunEvent is a normalized polling/SSE event assembled from steps, ledger, and tool invocations.
@@ -687,6 +716,57 @@ func (svc *Service) ListArtifacts(userID uint, conversationID uint) ([]model.Art
 	return publicArtifacts(artifacts), nil
 }
 
+// UploadArtifact validates and stores a user uploaded image as artifact version v1.
+func (svc *Service) UploadArtifact(userID uint, input UploadArtifactInput) (model.Artifact, model.ArtifactVersion, error) {
+	if userID == 0 {
+		return model.Artifact{}, model.ArtifactVersion{}, errors.New("upload user_id is required")
+	}
+	conversation, err := svc.dao.FindConversation(userID, input.ConversationID)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	metadata, err := validateImageUpload(input.Content, input.ContentType)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	name := safeUploadName(input.FileName, metadata.MimeType)
+	objectKey := uploadObjectKey(userID, conversation.ID, name)
+	stored, err := agent_svc.NewObjectStore().Save(objectKey, input.Content)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	params, _ := json.Marshal(map[string]interface{}{
+		"source":       "upload",
+		"width":        metadata.Width,
+		"height":       metadata.Height,
+		"content_type": metadata.MimeType,
+	})
+	return svc.artifacts.CreateArtifactWithVersion(artifactsvc.CreateArtifactWithVersionInput{
+		Artifact: model.Artifact{
+			UserID:         userID,
+			ConversationID: conversation.ID,
+			Name:           name,
+			Kind:           "image",
+			MimeType:       metadata.MimeType,
+			ObjectKey:      stored.ObjectKey,
+			PreviewURL:     stored.PreviewURL,
+			SizeBytes:      stored.SizeBytes,
+			Hash:           stored.Hash,
+			Visibility:     "private",
+			StoragePolicy:  "local_private",
+		},
+		Version: model.ArtifactVersion{
+			VersionNo:        1,
+			Operation:        "upload",
+			Prompt:           "user uploaded image",
+			GenerationParams: string(params),
+			ObjectKey:        stored.ObjectKey,
+			PreviewURL:       stored.PreviewURL,
+			Hash:             stored.Hash,
+		},
+	})
+}
+
 // ListArtifactVersions returns all versions of an artifact owned by the user.
 func (svc *Service) ListArtifactVersions(userID uint, artifactID uint) ([]model.ArtifactVersion, error) {
 	versions, err := svc.artifacts.ListVersions(userID, artifactID)
@@ -694,6 +774,92 @@ func (svc *Service) ListArtifactVersions(userID uint, artifactID uint) ([]model.
 		return nil, err
 	}
 	return publicArtifactVersions(versions), nil
+}
+
+// EditArtifact runs the image edit provider and appends the result to the artifact version chain.
+func (svc *Service) EditArtifact(ctx context.Context, userID uint, artifactID uint, request EditArtifactRequest) (model.ArtifactVersion, error) {
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		return model.ArtifactVersion{}, errors.New("edit prompt is required")
+	}
+	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	versions, err := svc.artifacts.ListVersions(userID, artifactID)
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	parent, err := selectParentVersion(versions, request.ArtifactVersionID)
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	imageConfig, err := svc.resolveRuntimeModelConfig(userID, "image", request.ImageModelConfigID)
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	registry := tools.NewRegistry()
+	adapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
+	if err := registry.Register(tools.InstrumentTool(tools.Tool{
+		Name:          runtimeImageModelName(imageConfig.Config) + "-edit",
+		Kind:          tools.KindImageEdit,
+		Provider:      imageConfig.Config.Provider,
+		Model:         runtimeImageModelName(imageConfig.Config),
+		ModelConfigID: imageConfig.GlobalID,
+		Capability: tools.Capability{
+			MaxPromptChars:     8000,
+			SupportsImageInput: true,
+			SupportsMask:       false,
+			MaxCandidates:      1,
+			CostPolicy:         "real_provider",
+		},
+		ImageEditProvider: adapter,
+	}, svc.dao)); err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	tool, err := registry.FindTool(tools.FindToolRequest{Kind: tools.KindImageEdit, UserID: userID, ModelConfigID: imageConfig.GlobalID})
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	result, err := tool.ImageEditProvider.EditImage(ctx, tools.ImageEditRequest{
+		UserID:         userID,
+		ConversationID: artifact.ConversationID,
+		TaskType:       "image_edit",
+		Prompt:         prompt,
+		ImageRefs:      []string{parent.ObjectKey},
+		CandidateCount: 1,
+	})
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	if len(result.Images) == 0 {
+		return model.ArtifactVersion{}, errors.New("image edit provider returned no images")
+	}
+	image := result.Images[0]
+	sourceRefs, _ := json.Marshal(map[string]interface{}{
+		"artifact_id":       artifact.ID,
+		"parent_version_id": parent.ID,
+		"image_refs":        []string{parent.ObjectKey},
+	})
+	version, err := svc.artifacts.CreateRefinedVersion(artifactsvc.CreateRefinedVersionInput{
+		UserID:          userID,
+		ArtifactID:      artifactID,
+		ParentVersionID: parent.ID,
+		Image: model.ArtifactVersion{
+			Operation:     "edit",
+			Prompt:        prompt,
+			ModelProvider: imageConfig.Config.Provider,
+			ModelName:     runtimeImageModelName(imageConfig.Config),
+			SourceRefs:    string(sourceRefs),
+			ObjectKey:     image.ObjectKey,
+			PreviewURL:    image.PreviewURL,
+			Hash:          image.Hash,
+		},
+	})
+	if err != nil {
+		return model.ArtifactVersion{}, err
+	}
+	return publicArtifactVersions([]model.ArtifactVersion{version})[0], nil
 }
 
 // DownloadArtifact resolves an owned artifact to a local file path.
@@ -951,6 +1117,105 @@ func publicArtifactVersions(versions []model.ArtifactVersion) []model.ArtifactVe
 		result[index].PreviewURL = ""
 	}
 	return result
+}
+
+type imageUploadMetadata struct {
+	MimeType string
+	Width    int
+	Height   int
+}
+
+func validateImageUpload(content []byte, contentType string) (imageUploadMetadata, error) {
+	if len(content) == 0 {
+		return imageUploadMetadata{}, errors.New("upload image is empty")
+	}
+	if int64(len(content)) > MaxImageUploadBytes {
+		return imageUploadMetadata{}, fmt.Errorf("upload image exceeds %d bytes", MaxImageUploadBytes)
+	}
+	detected := http.DetectContentType(content)
+	if !allowedImageMime(detected) {
+		return imageUploadMetadata{}, fmt.Errorf("unsupported image mime %q", detected)
+	}
+	if contentType = strings.TrimSpace(strings.Split(contentType, ";")[0]); contentType != "" && !strings.EqualFold(contentType, detected) {
+		return imageUploadMetadata{}, fmt.Errorf("upload mime mismatch: header %q detected %q", contentType, detected)
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(content))
+	if err != nil {
+		return imageUploadMetadata{}, fmt.Errorf("decode upload image: %w", err)
+	}
+	if config.Width <= 0 || config.Height <= 0 {
+		return imageUploadMetadata{}, errors.New("upload image dimensions are invalid")
+	}
+	if config.Width*config.Height > maxImageUploadPixels {
+		return imageUploadMetadata{}, fmt.Errorf("upload image pixels exceed %d", maxImageUploadPixels)
+	}
+	return imageUploadMetadata{MimeType: detected, Width: config.Width, Height: config.Height}, nil
+}
+
+func allowedImageMime(mimeType string) bool {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/png", "image/jpeg", "image/gif":
+		return true
+	default:
+		return false
+	}
+}
+
+func safeUploadName(name string, mimeType string) string {
+	name = agent_svc.SafeDownloadName(strings.TrimSpace(name))
+	if name == "" || name == "." {
+		name = "uploaded-image" + extensionForMime(mimeType)
+	}
+	if filepath.Ext(name) == "" {
+		name += extensionForMime(mimeType)
+	}
+	return name
+}
+
+func extensionForMime(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(mimeType)) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	default:
+		return ".png"
+	}
+}
+
+func uploadObjectKey(userID uint, conversationID uint, name string) string {
+	return path.Join(
+		fmt.Sprintf("user-%d", userID),
+		fmt.Sprintf("conversation-%d", conversationID),
+		"uploads",
+		fmt.Sprintf("%d-%s-%s", time.Now().UnixNano(), randomHex(6), name),
+	)
+}
+
+func randomHex(byteCount int) string {
+	if byteCount <= 0 {
+		return ""
+	}
+	buffer := make([]byte, byteCount)
+	if _, err := rand.Read(buffer); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 16)
+	}
+	return hex.EncodeToString(buffer)
+}
+
+func selectParentVersion(versions []model.ArtifactVersion, requestedID uint) (model.ArtifactVersion, error) {
+	if len(versions) == 0 {
+		return model.ArtifactVersion{}, errors.New("artifact has no versions")
+	}
+	if requestedID > 0 {
+		for _, version := range versions {
+			if version.ID == requestedID {
+				return version, nil
+			}
+		}
+		return model.ArtifactVersion{}, errors.New("requested parent version was not found")
+	}
+	return versions[len(versions)-1], nil
 }
 
 func memoryItemsFromModel(memories []model.ContextMemory) []domain.MemoryItem {

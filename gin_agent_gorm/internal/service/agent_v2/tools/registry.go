@@ -197,9 +197,15 @@ type GeneratedImage struct {
 }
 
 type ImageEditRequest struct {
-	Prompt    string
-	ImageRefs []string
-	MaskRef   string
+	UserID         uint
+	ConversationID uint
+	RunID          uint
+	StepID         uint
+	TaskType       string
+	Prompt         string
+	ImageRefs      []string
+	MaskRef        string
+	CandidateCount int
 }
 
 type ImageEditResult struct {

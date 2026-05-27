@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"gin-biz-web-api/internal/service/agent_svc"
@@ -163,5 +164,47 @@ func TestLegacyProviderAdapterPrefixesMultiCandidateObjectKeys(t *testing.T) {
 	}
 	if result.Images[1].ObjectKey != "user-7/conversation-8/run-9/candidate-3-poster.png" {
 		t.Fatalf("second ObjectKey = %q, want candidate-indexed key", result.Images[1].ObjectKey)
+	}
+}
+
+func TestLegacyProviderAdapterEditImageStoresEditedFilesWithSourceRefsInPrompt(t *testing.T) {
+	provider := &fakeLegacyProvider{
+		files: []agent_svc.GeneratedFile{
+			{Name: "edited.png", Kind: "image", MimeType: "image/png", Content: []byte("edited-bytes")},
+		},
+	}
+	store := &fakeLegacyObjectStore{}
+	adapter := NewLegacyProviderAdapterWithDependencies(provider, store, model.UserModelConfig{
+		UserID:      7,
+		Provider:    "google",
+		ImageModel:  "imagen-edit",
+		Temperature: "0.3",
+	})
+
+	result, err := adapter.EditImage(context.Background(), ImageEditRequest{
+		UserID:         7,
+		ConversationID: 8,
+		TaskType:       "image_edit",
+		Prompt:         "make the background warmer",
+		ImageRefs:      []string{"objects/original.png"},
+		CandidateCount: 1,
+	})
+	if err != nil {
+		t.Fatalf("EditImage() error = %v", err)
+	}
+	if len(result.Images) != 1 {
+		t.Fatalf("len(Images) = %d, want 1", len(result.Images))
+	}
+	if result.Images[0].ObjectKey != "user-7/conversation-8/manual/edits/edited.png" {
+		t.Fatalf("ObjectKey = %q, want manual edit scoped key", result.Images[0].ObjectKey)
+	}
+	if store.objectKey != result.Images[0].ObjectKey || string(store.content) != "edited-bytes" {
+		t.Fatalf("stored key/content = %q/%q, want edited image", store.objectKey, string(store.content))
+	}
+	if provider.generationRequest.TaskType != "image_edit" {
+		t.Fatalf("TaskType = %q, want image_edit", provider.generationRequest.TaskType)
+	}
+	if !strings.Contains(provider.generationRequest.Prompt, "objects/original.png") {
+		t.Fatalf("Prompt = %q, want source image reference", provider.generationRequest.Prompt)
 	}
 }

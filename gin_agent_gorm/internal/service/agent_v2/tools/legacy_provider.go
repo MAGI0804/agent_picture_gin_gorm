@@ -133,6 +133,56 @@ func (adapter *LegacyProviderAdapter) GenerateImage(
 	return ImageGenerationResult{Images: images}, nil
 }
 
+// EditImage implements ImageEditProvider. The current legacy provider has no native image-input
+// field, so this adapter preserves the interface and includes source references in the prompt.
+func (adapter *LegacyProviderAdapter) EditImage(
+	ctx context.Context,
+	request ImageEditRequest,
+) (ImageEditResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ImageEditResult{}, err
+	}
+	prompt := strings.TrimSpace(request.Prompt)
+	if len(request.ImageRefs) > 0 {
+		prompt = strings.TrimSpace(fmt.Sprintf(
+			"%s\n\nReference image object keys: %s\nEdit the referenced image while preserving the requested subject identity and composition unless the prompt says otherwise.",
+			prompt,
+			strings.Join(request.ImageRefs, ", "),
+		))
+	}
+	files, err := adapter.provider.Generate(agent_svc.GenerationRequest{
+		Prompt:          prompt,
+		Intent:          "image_edit",
+		TaskType:        coalesceString(request.TaskType, "image_edit"),
+		Stream:          true,
+		ReturnReasoning: true,
+		Temperature:     adapter.config.Temperature,
+		ModelConfig:     adapter.config,
+	})
+	if err != nil {
+		return ImageEditResult{}, err
+	}
+	images := make([]GeneratedImage, 0, len(files))
+	for index, file := range files {
+		name := safeGeneratedName(file.Name, index)
+		objectKey := editObjectKey(request, name, index)
+		stored, err := adapter.store.Save(objectKey, file.Content)
+		if err != nil {
+			return ImageEditResult{}, err
+		}
+		images = append(images, GeneratedImage{
+			Name:       name,
+			Kind:       coalesceString(file.Kind, "image"),
+			MimeType:   coalesceString(file.MimeType, "application/octet-stream"),
+			ObjectKey:  stored.ObjectKey,
+			PreviewURL: stored.PreviewURL,
+			SizeBytes:  stored.SizeBytes,
+			Hash:       stored.Hash,
+		})
+	}
+	return ImageEditResult{Images: images}, nil
+}
+
 func safeGeneratedName(name string, index int) string {
 	name = agent_svc.SafeDownloadName(strings.TrimSpace(name))
 	if name == "" || name == "." {
@@ -149,6 +199,23 @@ func generatedObjectKey(request ImageGenerationRequest, name string, index int) 
 		fmt.Sprintf("user-%d", request.UserID),
 		fmt.Sprintf("conversation-%d", request.ConversationID),
 		fmt.Sprintf("run-%d", request.RunID),
+		name,
+	)
+}
+
+func editObjectKey(request ImageEditRequest, name string, index int) string {
+	if request.CandidateCount > 1 {
+		name = fmt.Sprintf("edit-%d-%s", index+1, name)
+	}
+	runPart := "manual"
+	if request.RunID > 0 {
+		runPart = fmt.Sprintf("run-%d", request.RunID)
+	}
+	return path.Join(
+		fmt.Sprintf("user-%d", request.UserID),
+		fmt.Sprintf("conversation-%d", request.ConversationID),
+		runPart,
+		"edits",
 		name,
 	)
 }

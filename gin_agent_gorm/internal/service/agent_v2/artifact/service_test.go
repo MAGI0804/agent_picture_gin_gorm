@@ -235,6 +235,34 @@ func TestServiceCreateRefinedVersionKeepsParentAndUpdatesArtifactPreview(t *test
 	}
 }
 
+func TestServiceCreateRefinedVersionAllowsManualEditOperation(t *testing.T) {
+	repo := &fakeRepository{
+		artifact: model.Artifact{BaseModel: model.BaseModel{ID: 3}, UserID: 7},
+		versions: []model.ArtifactVersion{
+			{BaseModel: model.BaseModel{ID: 5}, ArtifactID: 3, VersionNo: 1, Operation: "upload", ObjectKey: "objects/original.png"},
+		},
+	}
+	svc := NewService(repo)
+
+	version, err := svc.CreateRefinedVersion(CreateRefinedVersionInput{
+		UserID:          7,
+		ArtifactID:      3,
+		ParentVersionID: 5,
+		Image: model.ArtifactVersion{
+			Operation:  "edit",
+			Prompt:     "change background",
+			ObjectKey:  "objects/edited.png",
+			PreviewURL: "/preview/edited",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateRefinedVersion() error = %v", err)
+	}
+	if version.Operation != "edit" || version.ParentVersionID != 5 || version.VersionNo != 2 {
+		t.Fatalf("version = %#v, want edit child version", version)
+	}
+}
+
 type fakeRepository struct {
 	artifact                 model.Artifact
 	createdArtifact          bool
