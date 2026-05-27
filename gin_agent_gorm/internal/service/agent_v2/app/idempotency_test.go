@@ -19,6 +19,40 @@ func TestNormalizeIdempotencyKeyTrimsAndBoundsKey(t *testing.T) {
 	}
 }
 
+func TestIdempotencyKeyUniqueValueUsesNilForMissingKey(t *testing.T) {
+	if got := idempotencyKeyUniqueValue("   "); got != nil {
+		t.Fatalf("idempotencyKeyUniqueValue() = %v, want nil", *got)
+	}
+}
+
+func TestIdempotencyKeyUniqueValueNormalizesUserKey(t *testing.T) {
+	got := idempotencyKeyUniqueValue("  run-key  ")
+	if got == nil || *got != "run-key" {
+		t.Fatalf("idempotencyKeyUniqueValue() = %v, want run-key", got)
+	}
+}
+
+func TestIsUniqueConstraintErrorRecognizesCommonDrivers(t *testing.T) {
+	tests := []string{
+		"Error 1062: Duplicate entry '1-key' for key 'idx_agent_runs_user_idempotency_unique'",
+		"UNIQUE constraint failed: agent_runs.user_id, agent_runs.idempotency_key_unique",
+		"duplicate key value violates unique constraint",
+	}
+	for _, message := range tests {
+		t.Run(message, func(t *testing.T) {
+			if !isUniqueConstraintError(fakeError(message)) {
+				t.Fatalf("isUniqueConstraintError(%q) = false, want true", message)
+			}
+		})
+	}
+}
+
+type fakeError string
+
+func (err fakeError) Error() string {
+	return string(err)
+}
+
 func TestPublicArtifactsHideObjectKeyAndUsePreviewProxy(t *testing.T) {
 	artifacts := publicArtifacts([]model.Artifact{
 		{

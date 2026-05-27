@@ -5,6 +5,8 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -14,41 +16,53 @@ import (
 	"gin-biz-web-api/model"
 )
 
-// Repository 定义执行器需要的数据写入能力，便于后续替换 DAO 或做单元测试。
+// Repository defines the persistence boundary used by the workflow executor.
 type Repository interface {
 	CreateStep(step *model.AgentStep) error
 	UpdateStep(stepID uint, attrs map[string]interface{}) error
 	UpdateRun(runID uint, attrs map[string]interface{}) error
 	FindRunStatus(runID uint) (string, error)
+	FindReusableStep(runID uint, stepKey string, inputHash string) (model.AgentStep, bool, error)
+	MaxStepAttempt(runID uint, stepKey string, inputHash string) (int, error)
+	CountStepAttempts(runID uint) (int, error)
+	CountStepAttemptsByKey(runID uint, stepKey string) (int, error)
 }
 
-// Executor 负责推进 workflow：创建 step、执行节点、保存状态、处理失败。
+// Executor advances a workflow and records every step attempt.
 type Executor struct {
-	repo Repository
+	repo        Repository
+	maxAttempts int
+	now         func() time.Time
 }
 
 var ErrRunCancelled = errors.New("agent v2 run cancelled")
 
-// NewExecutor 创建 workflow 执行器。
+const defaultMaxAttempts = 3
+
+// NewExecutor creates a workflow executor.
 func NewExecutor(repo Repository) *Executor {
-	return &Executor{repo: repo}
+	return &Executor{
+		repo:        repo,
+		maxAttempts: defaultMaxAttempts,
+		now:         time.Now,
+	}
 }
 
-// Execute 按 workflow 定义的顺序执行所有节点，并把每一步写入 agent_steps。
+// Execute runs all workflow nodes in dependency order.
 func (executor *Executor) Execute(
 	ctx context.Context,
 	state domain.RunState,
 	flow workflow.Workflow,
 ) (domain.RunState, error) {
-	// 第一步：标记 run 开始执行，并记录 workflow 名称和版本。
 	if err := executor.ensureRunNotCancelled(state.RunID); err != nil {
 		return state, err
 	}
+	startedAt := executor.now()
 	if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 		"status":           domain.RunStatusRunning,
 		"workflow_name":    flow.Name,
 		"workflow_version": flow.Version,
-		"started_at":       int(time.Now().Unix()),
+		"started_at":       int(startedAt.Unix()),
 	}); err != nil {
 		return state, err
 	}
@@ -64,90 +78,233 @@ func (executor *Executor) Execute(
 		return state, err
 	}
 
+	usage, err := executor.initialBudgetUsage(state.RunID)
+	if err != nil {
+		_ = executor.failRun(state.RunID, err)
+		return state, err
+	}
 	for _, node := range nodes {
 		if err := executor.ensureRunNotCancelled(state.RunID); err != nil {
 			return state, err
 		}
-		start := time.Now()
+		if err := executor.ensureWithinTimeoutBudget(state, startedAt); err != nil {
+			_ = executor.failRun(state.RunID, err)
+			return state, err
+		}
 
-		// 第二步：执行节点前保存输入快照和 input hash，后续用于重试和审计。
 		inputJSON := mustJSON(state)
-		step := model.AgentStep{
-			AgentRunID: state.RunID,
-			Name:       node.Key(),
-			StepKey:    node.Key(),
-			Status:     domain.StepStatusRunning,
-			Attempt:    1,
-			Input:      inputJSON,
-			InputJSON:  inputJSON,
-			InputHash:  hashText(inputJSON),
-		}
-		if err := executor.repo.CreateStep(&step); err != nil {
-			_ = executor.failRun(state.RunID, err)
-			return state, err
-		}
-
-		// 第三步：调用具体 Agent 节点。当前是 mock 节点，后续替换真实 Agent。
-		result, err := node.Run(ctx, state)
-		durationMS := time.Since(start).Milliseconds()
-		if cancelErr := executor.ensureRunNotCancelled(state.RunID); cancelErr != nil {
-			_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
-				"status":        domain.StepStatusCancelled,
-				"error_message": cancelErr.Error(),
-				"duration_ms":   durationMS,
-			})
-			return state, cancelErr
-		}
+		inputHash := hashText(inputJSON)
+		reusableStep, ok, err := executor.repo.FindReusableStep(state.RunID, node.Key(), inputHash)
 		if err != nil {
-			_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
-				"status":        domain.StepStatusFailed,
-				"error_message": err.Error(),
-				"duration_ms":   durationMS,
-			})
+			_ = executor.failRun(state.RunID, err)
+			return state, err
+		}
+		if ok {
+			result, err := stepResultFromCompletedStep(reusableStep)
+			if err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+			state = applyStepResult(state, node.Key(), result)
+			if err := executor.saveState(state); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+			continue
+		}
+
+		lastAttempt, err := executor.repo.MaxStepAttempt(state.RunID, node.Key(), inputHash)
+		if err != nil {
+			_ = executor.failRun(state.RunID, err)
+			return state, err
+		}
+		if lastAttempt >= executor.maxAttempts {
+			err := errors.Errorf("step %s retry budget exhausted after %d attempts", node.Key(), lastAttempt)
 			_ = executor.failRun(state.RunID, err)
 			return state, err
 		}
 
-		// 第四步：保存节点输出、输出 hash 和耗时，形成可观察 timeline。
-		if result.Status == "" {
-			result.Status = domain.StepStatusCompleted
-		}
-		outputJSON := mustJSON(result)
-		if err := executor.repo.UpdateStep(step.ID, map[string]interface{}{
-			"status":      result.Status,
-			"output":      result.Summary,
-			"output_json": outputJSON,
-			"output_hash": hashText(outputJSON),
-			"duration_ms": durationMS,
-		}); err != nil {
-			_ = executor.failRun(state.RunID, err)
-			return state, err
-		}
+		completed := false
+		for attempt := lastAttempt + 1; attempt <= executor.maxAttempts; attempt++ {
+			if err := executor.ensureWithinTimeoutBudget(state, startedAt); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+			if err := executor.consumeAttemptBudget(state, &usage, node.Key()); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
 
-		// 第五步：把节点结果合并进 RunState，并保存最新 state_json。
-		state = applyStepResult(state, node.Key(), result)
-		if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
-			"state_json": mustJSON(state),
-			"task_type":  state.TaskType,
-			"intent":     state.Intent,
-		}); err != nil {
+			start := executor.now()
+			step := model.AgentStep{
+				AgentRunID: state.RunID,
+				Name:       node.Key(),
+				StepKey:    node.Key(),
+				Status:     domain.StepStatusRunning,
+				Attempt:    attempt,
+				Input:      inputJSON,
+				InputJSON:  inputJSON,
+				InputHash:  inputHash,
+			}
+			if err := executor.repo.CreateStep(&step); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+
+			result, err := node.Run(ctx, state)
+			durationMS := executor.now().Sub(start).Milliseconds()
+			if cancelErr := executor.ensureRunNotCancelled(state.RunID); cancelErr != nil {
+				_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
+					"status":        domain.StepStatusCancelled,
+					"error_message": cancelErr.Error(),
+					"error_code":    "cancelled",
+					"duration_ms":   durationMS,
+				})
+				return state, cancelErr
+			}
+			if err != nil {
+				status := domain.StepStatusFailed
+				if isRetryableProviderError(err) && attempt < executor.maxAttempts {
+					status = domain.StepStatusRetrying
+				}
+				_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
+					"status":        status,
+					"error_message": err.Error(),
+					"error_code":    classifyStepError(err),
+					"duration_ms":   durationMS,
+				})
+				if status == domain.StepStatusRetrying {
+					continue
+				}
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+			if err := executor.ensureWithinTimeoutBudget(state, startedAt); err != nil {
+				_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
+					"status":        domain.StepStatusFailed,
+					"error_message": err.Error(),
+					"error_code":    "timeout_budget_exceeded",
+					"duration_ms":   durationMS,
+				})
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+
+			if result.Status == "" {
+				result.Status = domain.StepStatusCompleted
+			}
+			outputJSON := mustJSON(result)
+			if err := executor.repo.UpdateStep(step.ID, map[string]interface{}{
+				"status":      result.Status,
+				"output":      result.Summary,
+				"output_json": outputJSON,
+				"output_hash": hashText(outputJSON),
+				"duration_ms": durationMS,
+			}); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+
+			state = applyStepResult(state, node.Key(), result)
+			if err := executor.saveState(state); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+			completed = true
+			break
+		}
+		if !completed {
+			err := errors.Errorf("step %s retry budget exhausted after %d attempts", node.Key(), executor.maxAttempts)
 			_ = executor.failRun(state.RunID, err)
 			return state, err
 		}
 	}
 
-	// 第六步：所有节点完成后标记 run 完成。
 	if err := executor.ensureRunNotCancelled(state.RunID); err != nil {
 		return state, err
 	}
 	if err := executor.repo.UpdateRun(state.RunID, map[string]interface{}{
 		"status":       domain.RunStatusCompleted,
-		"completed_at": int(time.Now().Unix()),
+		"completed_at": int(executor.now().Unix()),
 		"state_json":   mustJSON(state),
 	}); err != nil {
 		return state, err
 	}
 	return state, nil
+}
+
+type budgetUsage struct {
+	toolCalls        int
+	imageGenerations int
+}
+
+func (executor *Executor) initialBudgetUsage(runID uint) (budgetUsage, error) {
+	toolCalls, err := executor.repo.CountStepAttempts(runID)
+	if err != nil {
+		return budgetUsage{}, err
+	}
+	imageGenerations, err := executor.repo.CountStepAttemptsByKey(runID, "image_generation_agent")
+	if err != nil {
+		return budgetUsage{}, err
+	}
+	return budgetUsage{
+		toolCalls:        toolCalls,
+		imageGenerations: imageGenerations,
+	}, nil
+}
+
+func (executor *Executor) saveState(state domain.RunState) error {
+	return executor.repo.UpdateRun(state.RunID, map[string]interface{}{
+		"state_json": mustJSON(state),
+		"task_type":  state.TaskType,
+		"intent":     state.Intent,
+	})
+}
+
+func (executor *Executor) consumeAttemptBudget(state domain.RunState, usage *budgetUsage, nodeKey string) error {
+	if state.Budget.MaxToolCalls > 0 && usage.toolCalls >= state.Budget.MaxToolCalls {
+		return errors.Errorf("tool call budget exceeded: attempted %d calls, max_tool_calls is %d", usage.toolCalls+1, state.Budget.MaxToolCalls)
+	}
+	if nodeKey == "image_generation_agent" && state.Budget.MaxImageGenerations > 0 && usage.imageGenerations >= state.Budget.MaxImageGenerations {
+		return errors.Errorf("image generation budget exceeded: attempted %d generations, max_image_generations is %d", usage.imageGenerations+1, state.Budget.MaxImageGenerations)
+	}
+	usage.toolCalls++
+	if nodeKey == "image_generation_agent" {
+		usage.imageGenerations++
+	}
+	return nil
+}
+
+func (executor *Executor) ensureWithinTimeoutBudget(state domain.RunState, startedAt time.Time) error {
+	if state.Budget.TimeoutSeconds <= 0 {
+		return nil
+	}
+	elapsed := executor.now().Sub(startedAt)
+	if elapsed <= time.Duration(state.Budget.TimeoutSeconds)*time.Second {
+		return nil
+	}
+	return errors.Errorf("run timeout budget exceeded: elapsed %dms, timeout_seconds is %d", elapsed.Milliseconds(), state.Budget.TimeoutSeconds)
+}
+
+func stepResultFromCompletedStep(step model.AgentStep) (domain.StepResult, error) {
+	var result domain.StepResult
+	if strings.TrimSpace(step.OutputJSON) == "" {
+		return domain.StepResult{
+			Status:  domain.StepStatusCompleted,
+			Summary: step.Output,
+			Output:  map[string]interface{}{},
+		}, nil
+	}
+	if err := json.Unmarshal([]byte(step.OutputJSON), &result); err != nil {
+		return domain.StepResult{}, errors.Wrapf(err, "decode completed step %d output", step.ID)
+	}
+	if result.Status == "" {
+		result.Status = domain.StepStatusCompleted
+	}
+	if result.Output == nil {
+		result.Output = map[string]interface{}{}
+	}
+	return result, nil
 }
 
 func (executor *Executor) ensureRunNotCancelled(runID uint) error {
@@ -161,7 +318,6 @@ func (executor *Executor) ensureRunNotCancelled(runID uint) error {
 	return nil
 }
 
-// failRun 将 run 标记为失败，并保存错误摘要。
 func (executor *Executor) failRun(runID uint, err error) error {
 	if err == nil {
 		err = errors.New("agent v2 run failed")
@@ -172,7 +328,53 @@ func (executor *Executor) failRun(runID uint, err error) error {
 	})
 }
 
-// applyStepResult 把节点输出合并到共享 RunState。
+func isRetryableProviderError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if stderrors.Is(err, context.Canceled) {
+		return false
+	}
+	if stderrors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	retryableFragments := []string{
+		"timeout",
+		"deadline exceeded",
+		"temporar",
+		"connection reset",
+		"connection refused",
+		"i/o timeout",
+		"rate limit",
+		"too many requests",
+		"429",
+		"502",
+		"503",
+		"504",
+	}
+	for _, fragment := range retryableFragments {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func classifyStepError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if stderrors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	if isRetryableProviderError(err) {
+		return "retryable_provider_error"
+	}
+	return "provider_error"
+}
+
+// applyStepResult merges one node output into the shared RunState.
 func applyStepResult(state domain.RunState, key string, result domain.StepResult) domain.RunState {
 	if state.Metadata == nil {
 		state.Metadata = map[string]string{}
@@ -316,7 +518,7 @@ func parseIssueList(value interface{}) []string {
 	}
 }
 
-// mustJSON 将对象序列化为 JSON，序列化失败时返回空对象字符串。
+// mustJSON serializes a value for deterministic step snapshots.
 func mustJSON(value interface{}) string {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -325,7 +527,7 @@ func mustJSON(value interface{}) string {
 	return string(data)
 }
 
-// hashText 计算文本 SHA1，用于记录 step 输入输出快照。
+// hashText computes a SHA1 snapshot hash for step inputs and outputs.
 func hashText(value string) string {
 	sum := sha1.Sum([]byte(value))
 	return hex.EncodeToString(sum[:])

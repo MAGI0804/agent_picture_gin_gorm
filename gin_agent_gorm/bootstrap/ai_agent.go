@@ -48,6 +48,7 @@ func ensureAIAgentIndexes() {
 		value interface{}
 		name  string
 	}{
+		{value: &model.AgentRun{}, name: "idx_agent_runs_user_idempotency_unique"},
 		{value: &model.UserModelConfig{}, name: "idx_user_model_configs_user_id"},
 		{value: &model.UserModelPermission{}, name: "idx_user_model_permissions_user_id"},
 		{value: &model.UserModelPermission{}, name: "idx_user_model_permissions_model_id"},

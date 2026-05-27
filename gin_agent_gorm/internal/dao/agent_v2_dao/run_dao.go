@@ -1,40 +1,61 @@
 package agent_v2_dao
 
 import (
+	"strings"
 	"time"
 
+	"gorm.io/gorm"
+
+	"gin-biz-web-api/internal/service/agent_v2/domain"
 	"gin-biz-web-api/model"
 	"gin-biz-web-api/pkg/database"
 )
 
-// FindConversation 校验会话归属，避免用户访问不属于自己的会话。
+// FindConversation validates that a conversation belongs to the current user.
 func (dao *AgentV2DAO) FindConversation(userID uint, conversationID uint) (model.Conversation, error) {
 	var conversation model.Conversation
 	err := database.DB.Where("user_id = ? AND id = ?", userID, conversationID).First(&conversation).Error
 	return conversation, err
 }
 
-// CreateMessage 写入触发本次 run 的用户消息。
+// CreateMessage writes one message row.
 func (dao *AgentV2DAO) CreateMessage(message *model.Message) error {
 	return database.DB.Create(message).Error
 }
 
-// UpdateMessageAgentRunID 将用户消息和 Agent Run 绑定起来，方便前端按消息恢复执行记录。
+// UpdateMessageAgentRunID links a message to its agent run.
 func (dao *AgentV2DAO) UpdateMessageAgentRunID(messageID uint, agentRunID uint) error {
 	return database.DB.Model(&model.Message{}).Where("id = ?", messageID).Update("agent_run_id", agentRunID).Error
 }
 
-// CreateRun 创建 Agent V2 的一次运行记录。
+// CreateRun creates one Agent V2 run.
 func (dao *AgentV2DAO) CreateRun(run *model.AgentRun) error {
 	return database.DB.Create(run).Error
 }
 
-// UpdateRun 更新 Agent Run 的状态、工作流信息或 RunState 快照。
+// CreateMessageAndRun atomically creates the trigger message and run, then links them.
+func (dao *AgentV2DAO) CreateMessageAndRun(message *model.Message, run *model.AgentRun) error {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(message).Error; err != nil {
+			return err
+		}
+		run.TriggerMessageID = message.ID
+		if err := tx.Create(run).Error; err != nil {
+			return err
+		}
+		message.AgentRunID = run.ID
+		return tx.Model(&model.Message{}).
+			Where("id = ?", message.ID).
+			Update("agent_run_id", run.ID).Error
+	})
+}
+
+// UpdateRun updates Agent Run state, workflow metadata, budget, or error fields.
 func (dao *AgentV2DAO) UpdateRun(runID uint, attrs map[string]interface{}) error {
 	return database.DB.Model(&model.AgentRun{}).Where("id = ?", runID).Updates(attrs).Error
 }
 
-// FindRun 按用户校验后读取指定 Agent Run。
+// FindRun reads one run after validating user ownership.
 func (dao *AgentV2DAO) FindRun(userID uint, runID uint) (model.AgentRun, error) {
 	var run model.AgentRun
 	err := database.DB.Where("user_id = ? AND id = ?", userID, runID).First(&run).Error
@@ -53,7 +74,7 @@ func (dao *AgentV2DAO) ClaimRunStatus(userID uint, runID uint, fromStatus string
 	attrs := map[string]interface{}{
 		"status": toStatus,
 	}
-	if toStatus == "running" {
+	if toStatus == domain.RunStatusRunning {
 		attrs["started_at"] = int(time.Now().Unix())
 		attrs["error_message"] = ""
 	}
@@ -69,8 +90,34 @@ func (dao *AgentV2DAO) ClaimRunStatus(userID uint, runID uint, fromStatus string
 // FindRunByIdempotencyKey returns an existing run for a user-supplied idempotency key.
 func (dao *AgentV2DAO) FindRunByIdempotencyKey(userID uint, idempotencyKey string) (model.AgentRun, error) {
 	var run model.AgentRun
-	err := database.DB.Where("user_id = ? AND idempotency_key = ?", userID, idempotencyKey).
+	err := database.DB.Where(
+		"user_id = ? AND (idempotency_key = ? OR idempotency_key_unique = ?)",
+		userID,
+		idempotencyKey,
+		idempotencyKey,
+	).
 		Order("id desc").
 		First(&run).Error
 	return run, err
+}
+
+// MarkTimedOutRunningRuns fails stale running runs older than the supplied cutoff.
+func (dao *AgentV2DAO) MarkTimedOutRunningRuns(cutoffUnix int, reason string) (int64, error) {
+	if cutoffUnix <= 0 {
+		return 0, nil
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "agent v2 run timed out"
+	}
+	result := database.DB.Model(&model.AgentRun{}).
+		Where("status = ? AND started_at > 0 AND started_at < ?", domain.RunStatusRunning, cutoffUnix).
+		Updates(map[string]interface{}{
+			"status":        domain.RunStatusFailed,
+			"error_message": reason,
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }

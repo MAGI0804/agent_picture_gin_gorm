@@ -25,7 +25,7 @@ func TestQueuedRunStateRestoresRunIDAndBudgetDefaults(t *testing.T) {
 	if state.Budget.MaxSteps != 3 {
 		t.Fatalf("MaxSteps = %d, want state budget", state.Budget.MaxSteps)
 	}
-	if state.Budget.MaxImageGenerations != 1 || state.Budget.TimeoutSeconds != 180 {
+	if state.Budget.MaxImageGenerations != 1 || state.Budget.MaxToolCalls != defaultRunMaxToolCalls || state.Budget.TimeoutSeconds != 180 {
 		t.Fatalf("budget defaults = %#v, want image count and timeout defaults", state.Budget)
 	}
 }
@@ -39,7 +39,7 @@ func TestQueuedRunStateUsesRunBudgetJSONWhenStateBudgetMissing(t *testing.T) {
 		BudgetJSON:     `{"max_steps":9,"max_image_generations":2,"timeout_seconds":240}`,
 	})
 
-	if state.Budget != (domain.RunBudget{MaxSteps: 9, MaxImageGenerations: 2, TimeoutSeconds: 240}) {
+	if state.Budget != (domain.RunBudget{MaxSteps: 9, MaxImageGenerations: 2, MaxToolCalls: defaultRunMaxToolCalls, TimeoutSeconds: 240}) {
 		t.Fatalf("Budget = %#v, want budget_json values", state.Budget)
 	}
 }

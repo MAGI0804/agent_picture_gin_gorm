@@ -92,6 +92,9 @@ func queuedRunState(run model.AgentRun) domain.RunState {
 	if state.Budget.MaxImageGenerations == 0 {
 		state.Budget.MaxImageGenerations = 1
 	}
+	if state.Budget.MaxToolCalls == 0 {
+		state.Budget.MaxToolCalls = defaultRunMaxToolCalls
+	}
 	if state.Budget.TimeoutSeconds == 0 {
 		state.Budget.TimeoutSeconds = 180
 	}

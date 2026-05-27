@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | V2 后端骨架 | 已完成 | Run、Step、Workflow、Runtime、DAO、基础 Service 已具备 |
 | 第15节第一轮验收 | 代码链路已闭环 | `/api/v2/conversations/:id/runs` 已接真实 provider adapter、真实 Requirement/Prompt/Image/Artifact/Review Agent 链路、artifact version 写库、V2 前端入口；真实外部模型端到端仍依赖用户配置可用图片模型 |
-| 第16节第二轮后端能力 | 已完成后端切片 | Memory 查询/删除、candidate group、selected artifact、vision review mock、reflection draft、basic budget、idempotency key、V2 鉴权预览代理、review quality_scores 写入、feedback/review memory proposal、proposal 去重/晋级、Prompt 高置信记忆带入、异步 Run 后端第一版已实现；本轮已将异步执行从进程内 goroutine 升级为 Asynq 持久队列第一版 |
+| 第16节第二轮后端能力 | 已完成后端切片 | Memory 查询/删除、candidate group、selected artifact、vision review mock、reflection draft、basic budget、idempotency key、V2 鉴权预览代理、review quality_scores 写入、feedback/review memory proposal、proposal 去重/晋级、Prompt 高置信记忆带入、异步 Run 后端第一版已实现；本轮已将异步执行从进程内 goroutine 升级为 Asynq 持久队列第一版，并完成 Task 3 的幂等唯一约束、step 恢复、临时错误重试和预算增强 |
 | 前端 V2 Workspace | 已完成第二批 | 新增 `/workspace`，支持输入、模型选择、运行、timeline、artifact board、版本、下载、反馈、选择按钮、Memory 入口、Review/Eval 面板、鉴权预览 blob |
 | 真实图片生成链路 | 已完成后端 E2E | V2 Image Agent 通过 Tool Registry 调用 Google Imagen 真实 provider，并由 Artifact Agent 写入 artifact 与 artifact_version；workflow `0.3.0` 已可接真实 Google Vision Review 或回退 mock；Google Imagen 后端 E2E 已通过，前端 `/workspace` 待本机服务和代理在线后冒烟 |
 
@@ -45,7 +45,7 @@
 | 5.2 Agent 输入输出契约 | Agent 输出必须结构化，不只返回自然语言 | 部分完成 | `domain.StepResult` 已承载真实 Requirement/Prompt/Image/Artifact/Review Agent 输出；Runtime 合并结构化需求、prompt、图片、artifact 引用和 review 结果 | schema 校验未做；`questions/plan/tool_calls/eval_scores` 未完整建模 |
 | 5.3 Task Ledger | 每个 run 维护任务账本 | 部分完成 | 已新增 `task_ledger_items` model 和 DAO | Runtime 尚未写 ledger；前端不展示 ledger |
 | 5.4 协同模式 | 支持顺序、Planner+Tools、Review、DAG、人工介入 | 部分完成 | 顺序 DAG 已支持；mock review 已接入主 workflow | 并行 DAG、Planner 动态工具、Human-in-the-loop、Refiner 未完成 |
-| 5.5 生产级协作约束 | 幂等、资源锁、预算、失败降级、可观测、安全边界 | 部分完成 | step hash、duration、basic max_steps budget、run idempotency key、基础权限查询、V2 preview 鉴权代理、access log token 脱敏已实现 | Redis lock、retry、费用预算、图片次数预算、失败降级、签名 URL 未完成 |
+| 5.5 生产级协作约束 | 幂等、资源锁、预算、失败降级、可观测、安全边界 | 部分完成 | step hash、duration、run idempotency key、`idempotency_key_unique` 复合唯一策略、completed step 恢复复用、provider 临时错误重试、max_steps/max_image_generations/max_tool_calls/timeout_seconds 预算、running 超时批量失败方法、基础权限查询、V2 preview 鉴权代理、access log token 脱敏已实现 | Redis lock、费用预算、失败降级、签名 URL 未完成 |
 
 ### 2.3 Agent 分工和工作流
 
@@ -116,7 +116,7 @@
 | 18 第3周 Vision Review | VLM/OCR 质量检查，低分问题写入 version | 部分完成 | mock review 已接入 workflow `0.3.0`；Google Gemini Vision Review 后端已接入并写入 `artifact_versions.quality_scores`；low-score reflection draft 和 memory proposal 已完成 | OCR/版面检测和真实 Vision E2E 复验未完成 |
 | 18 第4周自动 Refine | Review 低分自动二次 prompt，最多重试 | 未完成 | 暂无 | Refiner Agent 和 retry budget 未实现 |
 | 18 第5周进化闭环 | Top 5 失败原因，prompt version 回滚 | 部分完成 | reflection/prompt version 表、低分 draft 基础、review/feedback 到 memory proposal、proposal 晋级稳定记忆已完成 | Top 5 聚合、prompt promote/rollback、自动晋级策略未完成 |
-| 19 MVP 技术决策 | 固定 DAG、Redis/Asynq 长任务、MySQL 记忆、复用 provider、先反馈反思 | 部分完成 | 固定 DAG、MySQL 记忆、旧 provider 复用、反馈/反思基础已完成；已新增异步 Run 设计文档；`/runs/async` 已从进程内后台执行升级为 Asynq 持久队列第一版，worker 从 DB 重建 workflow 并抢占 `queued/failed -> running` | 完整 step 幂等恢复、细粒度 provider 错误分类、费用/图片次数预算和真实外部模型运行稳定性仍需后续验收 |
+| 19 MVP 技术决策 | 固定 DAG、Redis/Asynq 长任务、MySQL 记忆、复用 provider、先反馈反思 | 部分完成 | 固定 DAG、MySQL 记忆、旧 provider 复用、反馈/反思基础已完成；已新增异步 Run 设计文档；`/runs/async` 已从进程内后台执行升级为 Asynq 持久队列第一版，worker 从 DB 重建 workflow 并抢占 `queued/failed -> running`；Task 3 已补 completed step 恢复、provider 临时错误分类重试、图片/tool/耗时预算和 running 超时失败方法 | 费用预算、增量事件流和真实外部模型运行稳定性仍需后续验收 |
 
 ## 3. 第14节第一轮开发顺序进度
 
@@ -179,8 +179,8 @@
 | vision review | 已完成后端第一版 | 新增 `MockVisionReviewAgent` 作为降级；新增真实 `VisionReviewAgent` 和 Google Gemini Vision provider，能对 artifact 图片给分、输出 issues/should_refine，并写入 `artifact_versions.quality_scores` | 真实 Vision E2E 待代理/网络在线后复验；OCR/版面检测未做 |
 | V2 preview 鉴权代理 | 已完成第二版 | 新增 `GET /api/v2/artifacts/:id/preview`；前端通过带 token header 的 blob URL 预览；V2 列表/版本响应隐藏 object key 和静态 preview；access log 跳过预览/下载二进制响应体并脱敏 token/query；旧版 Chat preview 也已迁移到鉴权 API；静态 `/artifacts` 默认关闭 | 签名 URL 未做 |
 | low score reflection draft | 已完成 | 新增 `eval.ReflectionService`，低分 Review 生成 draft `agent_reflections`，不自动提升为 memory | 尚未接定时 Evolution Agent |
-| basic budget | 已完成 | Runtime 在执行前检查 `RunBudget.MaxSteps`，超过预算时 run 失败 | 还未做费用预算、图片次数预算、Redis lock |
-| idempotency key | 已完成 | `CreateRunRequest` 支持 `idempotency_key`；重复 key 返回已有 run | 还未加数据库唯一约束 |
+| basic budget | 已完成增强版 | Runtime 检查 `RunBudget.MaxSteps`、`MaxImageGenerations`、`MaxToolCalls`、`TimeoutSeconds`；超预算时 run 进入 failed 并保留可读错误 | 还未做费用预算、Redis lock |
+| idempotency key | 已完成增强版 | `CreateRunRequest` 支持 `idempotency_key`；重复 key 返回已有 run；新增 nullable `idempotency_key_unique` 与 `(user_id, idempotency_key_unique)` 复合唯一索引策略，普通空 key 不受唯一约束影响 | 旧存量非空 key 不做自动回填 |
 
 第16节验证命令：
 
@@ -243,9 +243,9 @@ npm run build
 
 1. 用同一真实 Google 配置从前端 `/workspace` 手工发起一次生成，确认 artifact board、preview、download、feedback、Review/Eval 面板展示与后端 E2E 结果一致。
 2. 在代理/网络在线时重跑 `go test -tags googlee2e ./internal/service/agent_v2/app -run TestGoogleModelEndToEnd -v`，确认真实 Google Vision review 也写入 `artifact_versions.quality_scores`。
-3. 补齐 Task 3：Run 幂等唯一约束、step 级恢复、provider 错误分类、费用/图片次数预算和 running 超时扫描。
-4. 接入 Task Ledger、Tool Invocation 和真正增量事件流，让前端 timeline 能看到 provider、耗时、重试和错误摘要。
-5. 继续完善 `memory_proposal`：语义去重和稳定记忆冲突降权。
+3. 接入 Task Ledger、Tool Invocation 和真正增量事件流，让前端 timeline 能看到 provider、耗时、重试和错误摘要。
+4. 继续完善 `memory_proposal`：语义去重和稳定记忆冲突降权。
+5. 升级 Requirement / Prompt Agent 为文本模型驱动并加 schema 校验。
 6. 后续如需要外链分享，再实现 artifact 短期签名 URL；当前前端预览已统一走鉴权 API，静态 `/artifacts` 默认关闭。
 
 ## 8. 更新日志
@@ -278,6 +278,7 @@ npm run build
 | 2026-05-27 | memory proposal 自动晋级保守策略 | 同一 scope 的候选记忆重复合并时逐步提升置信度，达到 `0.85` 后自动从 `memory_proposal` 晋级为稳定记忆，并记录 promoted 事件；单次反馈仍保持候选，避免过早影响 Prompt | `go test ./internal/service/agent_v2/memory ./internal/service/agent_v2/app -count=1` 通过 |
 | 2026-05-27 | 后续开发顺序文档 | 新增 `IMAGE_AGENT_V2_NEXT_DEVELOPMENT_ORDER.md`，基于进度文档、V2 指南、异步 Run 设计和当前项目代码，按依赖顺序整理后续 16 个开发任务与里程碑 | 文档已创建 |
 | 2026-05-27 | Task 2：Asynq 持久队列执行 Run | 新增 `agent_v2:run` Asynq 任务、payload 编解码、app 层 `RunQueue` 抽象、默认 Asynq 投递器和 worker 执行入口；`CreateRunAsync` 不再启动进程内 goroutine，而是落库 queued run 后投递队列；worker 从 DB 重建 RunState、模型配置和 workflow，并通过条件更新抢占 `queued/failed -> running` 后执行 | `go test ./internal/service/agent_v2/runtime ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers ./bootstrap ./job ./internal/dao/agent_v2_dao -count=1` 通过 |
+| 2026-05-27 | Task 3：Run 幂等、恢复、重试和预算 | 新增 `idempotency_key_unique` nullable 唯一键策略和 message/run 事务创建；Runtime 支持 completed step 按 input hash 复用、attempt 递增、`retrying` 状态、provider timeout/rate limit/网络错误重试、图片生成/tool call/总耗时预算；新增 running 超时批量失败方法 | `go test ./internal/service/agent_v2/runtime ./internal/service/agent_v2/app ./internal/dao/agent_v2_dao ./model ./bootstrap -count=1` 通过 |
 
 ## 9. Google 模型数据库配置
 

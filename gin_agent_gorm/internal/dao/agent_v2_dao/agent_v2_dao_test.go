@@ -7,14 +7,20 @@ type runDAOContract interface {
 	CreateMessage(message *model.Message) error
 	UpdateMessageAgentRunID(messageID uint, agentRunID uint) error
 	CreateRun(run *model.AgentRun) error
+	CreateMessageAndRun(message *model.Message, run *model.AgentRun) error
 	UpdateRun(runID uint, attrs map[string]interface{}) error
 	FindRun(userID uint, runID uint) (model.AgentRun, error)
 	FindRunByIdempotencyKey(userID uint, idempotencyKey string) (model.AgentRun, error)
+	MarkTimedOutRunningRuns(cutoffUnix int, reason string) (int64, error)
 }
 
 type stepDAOContract interface {
 	CreateStep(step *model.AgentStep) error
 	UpdateStep(stepID uint, attrs map[string]interface{}) error
+	FindReusableStep(runID uint, stepKey string, inputHash string) (model.AgentStep, bool, error)
+	MaxStepAttempt(runID uint, stepKey string, inputHash string) (int, error)
+	CountStepAttempts(runID uint) (int, error)
+	CountStepAttemptsByKey(runID uint, stepKey string) (int, error)
 	ListSteps(userID uint, runID uint) ([]model.AgentStep, error)
 }
 

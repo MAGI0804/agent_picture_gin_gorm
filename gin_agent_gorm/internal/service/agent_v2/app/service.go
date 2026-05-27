@@ -25,6 +25,7 @@ import (
 const (
 	maxIdempotencyKeyLength = 128
 	minReviewMemoryScore    = 0.70
+	defaultRunMaxToolCalls  = 16
 )
 
 // Service 是 Agent V2 的应用服务层，负责把 HTTP 请求编排成一次 Agent Run。
@@ -129,16 +130,7 @@ func (svc *Service) createRun(
 	if idempotencyKey != "" {
 		existingRun, err := svc.dao.FindRunByIdempotencyKey(userID, idempotencyKey)
 		if err == nil {
-			steps, stepErr := svc.dao.ListSteps(userID, existingRun.ID)
-			if stepErr != nil {
-				return nil, stepErr
-			}
-			return map[string]interface{}{
-				"conversation": conversation,
-				"agent_run":    existingRun,
-				"steps":        steps,
-				"idempotent":   true,
-			}, nil
+			return svc.idempotentRunResponse(conversation, userID, existingRun)
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
@@ -207,10 +199,6 @@ func (svc *Service) createRun(
 		InputType:      "normal",
 		Content:        request.Content,
 	}
-	if err := svc.dao.CreateMessage(&message); err != nil {
-		return nil, err
-	}
-
 	// 第三步：创建结构化 RunState，后续所有 Agent 节点都读写这份状态。
 	state := domain.RunState{
 		UserID:         userID,
@@ -220,6 +208,7 @@ func (svc *Service) createRun(
 		Budget: domain.RunBudget{
 			MaxSteps:            12,
 			MaxImageGenerations: normalizeCandidateCount(request.CandidateCount),
+			MaxToolCalls:        defaultRunMaxToolCalls,
 			TimeoutSeconds:      180,
 		},
 		Metadata: map[string]string{
@@ -247,25 +236,30 @@ func (svc *Service) createRun(
 
 	// 第四步：先落库 Agent Run，再把 run_id 回写到 RunState。
 	run := model.AgentRun{
-		ConversationID:   conversation.ID,
-		UserID:           userID,
-		TriggerMessageID: message.ID,
-		Status:           domain.RunStatusCreated,
-		TaskType:         state.TaskType,
-		WorkflowName:     "image_generation_v2",
-		WorkflowVersion:  "0.3.0",
-		StateJSON:        mustJSON(state),
-		BudgetJSON:       mustJSON(state.Budget),
-		IdempotencyKey:   idempotencyKey,
-		ImageModelName:   runtimeImageModelName(imageConfig.Config),
+		ConversationID:       conversation.ID,
+		UserID:               userID,
+		Status:               domain.RunStatusCreated,
+		TaskType:             state.TaskType,
+		WorkflowName:         "image_generation_v2",
+		WorkflowVersion:      "0.3.0",
+		StateJSON:            mustJSON(state),
+		BudgetJSON:           mustJSON(state.Budget),
+		IdempotencyKey:       idempotencyKey,
+		IdempotencyKeyUnique: idempotencyKeyUniqueValue(idempotencyKey),
+		ImageModelName:       runtimeImageModelName(imageConfig.Config),
 	}
 	if textConfigErr == nil {
 		run.TextModelName = runtimeTextModelName(textConfig.Config)
 	}
-	if err := svc.dao.CreateRun(&run); err != nil {
+	if err := svc.dao.CreateMessageAndRun(&message, &run); err != nil {
+		if idempotencyKey != "" && isUniqueConstraintError(err) {
+			existingRun, findErr := svc.dao.FindRunByIdempotencyKey(userID, idempotencyKey)
+			if findErr == nil {
+				return svc.idempotentRunResponse(conversation, userID, existingRun)
+			}
+		}
 		return nil, err
 	}
-	_ = svc.dao.UpdateMessageAgentRunID(message.ID, run.ID)
 
 	// 第五步：执行固定真实图片 workflow，调用 V2 tool registry 并写入 artifact/version。
 	state.RunID = run.ID
@@ -598,6 +592,31 @@ func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) er
 	return nil
 }
 
+func (svc *Service) idempotentRunResponse(conversation model.Conversation, userID uint, run model.AgentRun) (map[string]interface{}, error) {
+	steps, err := svc.dao.ListSteps(userID, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"conversation": conversation,
+		"agent_run":    run,
+		"steps":        steps,
+		"idempotent":   true,
+	}, nil
+}
+
+// FailTimedOutRuns marks stale running runs failed so queue retries or operators can see a terminal state.
+func (svc *Service) FailTimedOutRuns(timeoutSeconds int) (int64, error) {
+	if timeoutSeconds <= 0 {
+		return 0, nil
+	}
+	cutoffUnix := int(time.Now().Add(-time.Duration(timeoutSeconds) * time.Second).Unix())
+	return svc.dao.MarkTimedOutRunningRuns(
+		cutoffUnix,
+		fmt.Sprintf("agent v2 run timed out after %d seconds", timeoutSeconds),
+	)
+}
+
 func publicArtifacts(artifacts []model.Artifact) []model.Artifact {
 	result := make([]model.Artifact, len(artifacts))
 	copy(result, artifacts)
@@ -650,6 +669,25 @@ func normalizeIdempotencyKey(value string) string {
 		return value
 	}
 	return value[:maxIdempotencyKeyLength]
+}
+
+func idempotencyKeyUniqueValue(value string) *string {
+	value = normalizeIdempotencyKey(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "duplicate") ||
+		strings.Contains(message, "unique constraint") ||
+		strings.Contains(message, "constraint failed") ||
+		strings.Contains(message, "error 1062")
 }
 
 func normalizeCandidateCount(value int) int {

@@ -98,6 +98,7 @@ type ReviewResult struct {
 type RunBudget struct {
 	MaxSteps            int `json:"max_steps"`
 	MaxImageGenerations int `json:"max_image_generations"`
+	MaxToolCalls        int `json:"max_tool_calls"`
 	TimeoutSeconds      int `json:"timeout_seconds"`
 }
 

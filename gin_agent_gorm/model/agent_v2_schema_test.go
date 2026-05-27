@@ -2,6 +2,7 @@ package model
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -20,6 +21,7 @@ func TestAgentV2FirstRoundModelFields(t *testing.T) {
 				"StateJSON",
 				"BudgetJSON",
 				"IdempotencyKey",
+				"IdempotencyKeyUnique",
 				"LockKey",
 				"StartedAt",
 				"CompletedAt",
@@ -151,5 +153,23 @@ func TestAgentV2FirstRoundTableNames(t *testing.T) {
 				t.Fatalf("TableName() = %q, want %q", tt.name, tt.tableName)
 			}
 		})
+	}
+}
+
+func TestAgentRunIdempotencyUniqueIndexTags(t *testing.T) {
+	modelType := reflect.TypeOf(AgentRun{})
+	userID, ok := modelType.FieldByName("UserID")
+	if !ok {
+		t.Fatal("AgentRun.UserID missing")
+	}
+	idempotencyKeyUnique, ok := modelType.FieldByName("IdempotencyKeyUnique")
+	if !ok {
+		t.Fatal("AgentRun.IdempotencyKeyUnique missing")
+	}
+	if !strings.Contains(string(userID.Tag), "uniqueIndex:idx_agent_runs_user_idempotency_unique") {
+		t.Fatalf("UserID tag = %q, want composite idempotency unique index", userID.Tag)
+	}
+	if !strings.Contains(string(idempotencyKeyUnique.Tag), "uniqueIndex:idx_agent_runs_user_idempotency_unique") {
+		t.Fatalf("IdempotencyKeyUnique tag = %q, want composite idempotency unique index", idempotencyKeyUnique.Tag)
 	}
 }
