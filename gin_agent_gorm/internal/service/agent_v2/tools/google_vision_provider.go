@@ -40,24 +40,45 @@ func NewGoogleVisionProviderWithClient(config model.UserModelConfig, client *htt
 
 // AnalyzeImage implements VisionProvider.
 func (provider *GoogleVisionProvider) AnalyzeImage(ctx context.Context, request VisionRequest) (VisionResult, error) {
+	responseBody, err := provider.callMultimodal(ctx, request.ImageRef, request.Prompt)
+	if err != nil {
+		return VisionResult{}, err
+	}
+	return parseGoogleVisionResult(responseBody)
+}
+
+// ExtractText implements OCRProvider with the same Gemini multimodal endpoint.
+func (provider *GoogleVisionProvider) ExtractText(ctx context.Context, request OCRRequest) (OCRResult, error) {
+	prompt := strings.TrimSpace(request.Prompt)
+	if prompt == "" {
+		prompt = "Extract all visible text from this image and evaluate text readability and layout quality. Return JSON with keys text, text_readability, layout_score, issues, should_refine."
+	}
+	responseBody, err := provider.callMultimodal(ctx, request.ImageRef, prompt)
+	if err != nil {
+		return OCRResult{}, err
+	}
+	return parseGoogleOCRResult(responseBody)
+}
+
+func (provider *GoogleVisionProvider) callMultimodal(ctx context.Context, imageRef string, prompt string) ([]byte, error) {
 	apiKey := strings.TrimSpace(provider.config.APIKey)
 	if apiKey == "" {
-		return VisionResult{}, errors.New("google vision api key is empty")
+		return nil, errors.New("google vision api key is empty")
 	}
 	modelName := strings.TrimSpace(provider.config.ChatModel)
 	if modelName == "" {
 		modelName = strings.TrimSpace(provider.config.AnthropicModel)
 	}
 	if modelName == "" {
-		return VisionResult{}, errors.New("google vision model is empty")
+		return nil, errors.New("google vision model is empty")
 	}
 	baseURL := strings.TrimSpace(provider.config.BaseURL)
 	if baseURL == "" {
-		return VisionResult{}, errors.New("google vision base url is empty")
+		return nil, errors.New("google vision base url is empty")
 	}
-	imageDataURL, err := provider.imageDataURL(request.ImageRef)
+	imageDataURL, err := provider.imageDataURL(imageRef)
 	if err != nil {
-		return VisionResult{}, err
+		return nil, err
 	}
 
 	payload := map[string]interface{}{
@@ -66,7 +87,7 @@ func (provider *GoogleVisionProvider) AnalyzeImage(ctx context.Context, request 
 			{
 				"role": "user",
 				"content": []map[string]interface{}{
-					{"type": "text", "text": strings.TrimSpace(request.Prompt)},
+					{"type": "text", "text": strings.TrimSpace(prompt)},
 					{"type": "image_url", "image_url": map[string]string{"url": imageDataURL}},
 				},
 			},
@@ -76,28 +97,28 @@ func (provider *GoogleVisionProvider) AnalyzeImage(ctx context.Context, request 
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return VisionResult{}, errors.Wrap(err, "encode google vision request")
+		return nil, errors.Wrap(err, "encode google vision request")
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", joinGoogleVisionBaseURL(baseURL, "chat/completions"), bytes.NewReader(body))
 	if err != nil {
-		return VisionResult{}, errors.Wrap(err, "create google vision request")
+		return nil, errors.Wrap(err, "create google vision request")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := provider.client.Do(req)
 	if err != nil {
-		return VisionResult{}, errors.Wrap(err, "call google vision api")
+		return nil, errors.Wrap(err, "call google vision api")
 	}
 	defer resp.Body.Close()
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return VisionResult{}, errors.Wrap(err, "read google vision response")
+		return nil, errors.Wrap(err, "read google vision response")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return VisionResult{}, errors.Errorf("google vision api http %d: %s", resp.StatusCode, truncateVisionError(string(responseBody), 500))
+		return nil, errors.Errorf("google vision api http %d: %s", resp.StatusCode, truncateVisionError(string(responseBody), 500))
 	}
-	return parseGoogleVisionResult(responseBody)
+	return responseBody, nil
 }
 
 func (provider *GoogleVisionProvider) imageDataURL(imageRef string) (string, error) {
@@ -154,10 +175,14 @@ func parseGoogleVisionResult(body []byte) (VisionResult, error) {
 		Issues:  []string{},
 	}
 	var structured struct {
-		Summary      string   `json:"summary"`
-		OverallScore float64  `json:"overall_score"`
-		Issues       []string `json:"issues"`
-		ShouldRefine bool     `json:"should_refine"`
+		Summary          string   `json:"summary"`
+		OverallScore     float64  `json:"overall_score"`
+		RequirementMatch float64  `json:"requirement_match"`
+		CompositionScore float64  `json:"composition_score"`
+		TextReadability  float64  `json:"text_readability"`
+		LayoutScore      float64  `json:"layout_score"`
+		Issues           []string `json:"issues"`
+		ShouldRefine     bool     `json:"should_refine"`
 	}
 	if err := json.Unmarshal([]byte(stripJSONFence(content)), &structured); err == nil {
 		if strings.TrimSpace(structured.Summary) != "" {
@@ -166,10 +191,77 @@ func parseGoogleVisionResult(body []byte) (VisionResult, error) {
 		if structured.OverallScore > 0 {
 			result.Scores["overall"] = structured.OverallScore
 		}
+		if structured.RequirementMatch > 0 {
+			result.Scores["requirement_match"] = structured.RequirementMatch
+		}
+		if structured.CompositionScore > 0 {
+			result.Scores["composition_score"] = structured.CompositionScore
+		}
+		if structured.TextReadability > 0 {
+			result.Scores["text_readability"] = structured.TextReadability
+		}
+		if structured.LayoutScore > 0 {
+			result.Scores["layout_score"] = structured.LayoutScore
+		}
 		result.Issues = structured.Issues
 		result.ShouldRefine = structured.ShouldRefine
 	}
 	return result, nil
+}
+
+func parseGoogleOCRResult(body []byte) (OCRResult, error) {
+	visionResult, err := parseGoogleVisionResult(body)
+	if err != nil {
+		return OCRResult{}, err
+	}
+	result := OCRResult{
+		Text:            visionResult.Summary,
+		TextReadability: clampGoogleScore(visionResult.Scores["text_readability"]),
+		LayoutScore:     clampGoogleScore(visionResult.Scores["layout_score"]),
+		Issues:          append([]string{}, visionResult.Issues...),
+		ShouldRefine:    visionResult.ShouldRefine,
+	}
+	var response struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	_ = json.Unmarshal(body, &response)
+	if len(response.Choices) > 0 {
+		var structured struct {
+			Text            string   `json:"text"`
+			TextReadability float64  `json:"text_readability"`
+			LayoutScore     float64  `json:"layout_score"`
+			Issues          []string `json:"issues"`
+			ShouldRefine    bool     `json:"should_refine"`
+		}
+		if err := json.Unmarshal([]byte(stripJSONFence(response.Choices[0].Message.Content)), &structured); err == nil {
+			if strings.TrimSpace(structured.Text) != "" {
+				result.Text = strings.TrimSpace(structured.Text)
+			}
+			if structured.TextReadability > 0 {
+				result.TextReadability = clampGoogleScore(structured.TextReadability)
+			}
+			if structured.LayoutScore > 0 {
+				result.LayoutScore = clampGoogleScore(structured.LayoutScore)
+			}
+			result.Issues = structured.Issues
+			result.ShouldRefine = structured.ShouldRefine
+		}
+	}
+	return result, nil
+}
+
+func clampGoogleScore(score float64) float64 {
+	if score < 0 {
+		return 0
+	}
+	if score > 1 {
+		return 1
+	}
+	return score
 }
 
 func stripJSONFence(value string) string {

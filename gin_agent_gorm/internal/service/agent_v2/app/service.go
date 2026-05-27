@@ -201,6 +201,7 @@ func (svc *Service) createRun(
 		}, svc.dao))
 	}
 	if visionConfigErr == nil {
+		visionProvider := tools.NewGoogleVisionProvider(visionConfig.Config)
 		_ = registry.Register(tools.InstrumentTool(tools.Tool{
 			Name:          runtimeTextModelName(visionConfig.Config),
 			Kind:          tools.KindVision,
@@ -211,7 +212,19 @@ func (svc *Service) createRun(
 				SupportsImageInput: true,
 				CostPolicy:         "real_provider",
 			},
-			VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
+			VisionProvider: visionProvider,
+		}, svc.dao))
+		_ = registry.Register(tools.InstrumentTool(tools.Tool{
+			Name:          runtimeTextModelName(visionConfig.Config) + "-ocr",
+			Kind:          tools.KindOCR,
+			Provider:      visionConfig.Config.Provider,
+			Model:         runtimeTextModelName(visionConfig.Config),
+			ModelConfigID: visionConfig.GlobalID,
+			Capability: tools.Capability{
+				SupportsImageInput: true,
+				CostPolicy:         "real_provider",
+			},
+			OCRProvider: visionProvider,
 		}, svc.dao))
 	}
 
@@ -293,6 +306,7 @@ func (svc *Service) createRun(
 		TextModelConfigID:   textConfig.GlobalID,
 		ImageModelConfigID:  imageConfig.GlobalID,
 		VisionModelConfigID: visionConfig.GlobalID,
+		OCRModelConfigID:    visionConfig.GlobalID,
 		CandidateCount:      normalizeCandidateCount(request.CandidateCount),
 		ModelProvider:       imageConfig.Config.Provider,
 		ModelName:           runtimeImageModelName(imageConfig.Config),
@@ -720,14 +734,19 @@ func (svc *Service) recordRunReviewScores(userID uint, state domain.RunState) er
 			continue
 		}
 		if err := svc.artifacts.RecordReviewScores(artifactsvc.ReviewScoresInput{
-			UserID:       userID,
-			ArtifactID:   review.ArtifactID,
-			VersionID:    review.VersionID,
-			OverallScore: review.OverallScore,
-			RankScore:    review.RankScore,
-			Issues:       review.Issues,
-			ShouldRefine: review.ShouldRefine,
-			Reviewer:     coalesce(review.Reviewer, coalesce(state.Review.Reviewer, "mock_vision_review")),
+			UserID:           userID,
+			ArtifactID:       review.ArtifactID,
+			VersionID:        review.VersionID,
+			OverallScore:     review.OverallScore,
+			RequirementMatch: review.RequirementMatch,
+			CompositionScore: review.CompositionScore,
+			TextReadability:  review.TextReadability,
+			LayoutScore:      review.LayoutScore,
+			RankScore:        review.RankScore,
+			Issues:           review.Issues,
+			ShouldRefine:     review.ShouldRefine,
+			Reviewer:         coalesce(review.Reviewer, coalesce(state.Review.Reviewer, "mock_vision_review")),
+			ExtractedText:    review.ExtractedText,
 		}); err != nil {
 			return err
 		}
@@ -756,13 +775,17 @@ func candidateReviewsForPersistence(state domain.RunState) []domain.CandidateRev
 	reviews := make([]domain.CandidateReview, 0, len(state.Artifacts))
 	for _, artifact := range state.Artifacts {
 		reviews = append(reviews, domain.CandidateReview{
-			ArtifactID:   artifact.ID,
-			VersionID:    artifact.VersionID,
-			ImageRef:     artifact.PreviewURL,
-			OverallScore: state.Review.OverallScore,
-			Issues:       append([]string{}, state.Review.Issues...),
-			ShouldRefine: state.Review.ShouldRefine,
-			Reviewer:     state.Review.Reviewer,
+			ArtifactID:       artifact.ID,
+			VersionID:        artifact.VersionID,
+			ImageRef:         artifact.PreviewURL,
+			OverallScore:     state.Review.OverallScore,
+			RequirementMatch: state.Review.RequirementMatch,
+			CompositionScore: state.Review.CompositionScore,
+			TextReadability:  state.Review.TextReadability,
+			LayoutScore:      state.Review.LayoutScore,
+			Issues:           append([]string{}, state.Review.Issues...),
+			ShouldRefine:     state.Review.ShouldRefine,
+			Reviewer:         state.Review.Reviewer,
 		})
 	}
 	return reviews

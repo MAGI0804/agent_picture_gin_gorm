@@ -222,11 +222,19 @@ type VisionResult struct {
 }
 
 type OCRRequest struct {
+	UserID   uint
+	RunID    uint
+	StepID   uint
 	ImageRef string
+	Prompt   string
 }
 
 type OCRResult struct {
-	Text string
+	Text            string
+	TextReadability float64
+	LayoutScore     float64
+	Issues          []string
+	ShouldRefine    bool
 }
 
 type SegmentationRequest struct {

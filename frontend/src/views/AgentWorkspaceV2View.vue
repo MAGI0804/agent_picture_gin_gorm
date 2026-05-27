@@ -216,6 +216,22 @@
             <strong>{{ formatScore(selectedQualityScores.overall_score) }}</strong>
           </div>
           <div>
+            <span>Requirement</span>
+            <strong>{{ formatScore(selectedQualityScores.requirement_match) }}</strong>
+          </div>
+          <div>
+            <span>Composition</span>
+            <strong>{{ formatScore(selectedQualityScores.composition_score) }}</strong>
+          </div>
+          <div>
+            <span>Text</span>
+            <strong>{{ formatScore(selectedQualityScores.text_readability) }}</strong>
+          </div>
+          <div>
+            <span>Layout</span>
+            <strong>{{ formatScore(selectedQualityScores.layout_score) }}</strong>
+          </div>
+          <div>
             <span>Refine</span>
             <strong>{{ selectedQualityScores.should_refine ? '需要' : '不需要' }}</strong>
           </div>
@@ -228,6 +244,9 @@
           <li v-for="issue in selectedQualityScores.issues" :key="issue">{{ issue }}</li>
         </ul>
         <p v-else-if="!selectedQualityScores" class="muted">暂无版本质量分。</p>
+        <p v-if="selectedQualityScores?.extracted_text" class="muted">
+          OCR: {{ selectedQualityScores.extracted_text }}
+        </p>
         <details v-if="reviewStep" class="v2-step-detail">
           <summary>vision_review_agent</summary>
           <p>{{ summarizeStep(reviewStep) }}</p>
@@ -356,11 +375,16 @@ const resumingRun = ref(false)
 
 interface QualityScores {
   overall_score?: number
+  requirement_match?: number
+  composition_score?: number
+  text_readability?: number
+  layout_score?: number
   rank_score?: number
   issues?: string[]
   should_refine?: boolean
   reviewer?: string
   reviewed_at?: number
+  extracted_text?: string
 }
 
 interface StepResultSnapshot {
@@ -762,11 +786,16 @@ function parseQualityScores(raw?: string): QualityScores | null {
     const payload = JSON.parse(raw) as QualityScores
     return {
       overall_score: typeof payload.overall_score === 'number' ? payload.overall_score : undefined,
+      requirement_match: typeof payload.requirement_match === 'number' ? payload.requirement_match : undefined,
+      composition_score: typeof payload.composition_score === 'number' ? payload.composition_score : undefined,
+      text_readability: typeof payload.text_readability === 'number' ? payload.text_readability : undefined,
+      layout_score: typeof payload.layout_score === 'number' ? payload.layout_score : undefined,
       rank_score: typeof payload.rank_score === 'number' ? payload.rank_score : undefined,
       issues: Array.isArray(payload.issues) ? payload.issues.filter(item => typeof item === 'string') : [],
       should_refine: Boolean(payload.should_refine),
       reviewer: typeof payload.reviewer === 'string' ? payload.reviewer : '',
-      reviewed_at: typeof payload.reviewed_at === 'number' ? payload.reviewed_at : undefined
+      reviewed_at: typeof payload.reviewed_at === 'number' ? payload.reviewed_at : undefined,
+      extracted_text: typeof payload.extracted_text === 'string' ? payload.extracted_text : ''
     }
   } catch {
     return null

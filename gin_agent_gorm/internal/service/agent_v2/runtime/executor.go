@@ -574,6 +574,18 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		if score, ok := result.Output["overall_score"].(float64); ok {
 			state.Review.OverallScore = score
 		}
+		if score, ok := result.Output["requirement_match"].(float64); ok {
+			state.Review.RequirementMatch = score
+		}
+		if score, ok := result.Output["composition_score"].(float64); ok {
+			state.Review.CompositionScore = score
+		}
+		if score, ok := result.Output["text_readability"].(float64); ok {
+			state.Review.TextReadability = score
+		}
+		if score, ok := result.Output["layout_score"].(float64); ok {
+			state.Review.LayoutScore = score
+		}
 		state.Review.Issues = parseIssueList(result.Output["issues"])
 		if shouldRefine, ok := result.Output["should_refine"].(bool); ok {
 			state.Review.ShouldRefine = shouldRefine
@@ -647,15 +659,20 @@ func parseCandidateReviews(value interface{}) []domain.CandidateReview {
 			}
 			if item, ok := review.(map[string]interface{}); ok {
 				result = append(result, domain.CandidateReview{
-					ArtifactID:   uintValue(item["artifact_id"]),
-					VersionID:    uintValue(item["version_id"]),
-					ImageRef:     stringValue(item["image_ref"]),
-					OverallScore: float64Value(item["overall_score"]),
-					RankScore:    float64Value(item["rank_score"]),
-					Issues:       parseIssueList(item["issues"]),
-					ShouldRefine: boolValue(item["should_refine"]),
-					Reviewer:     stringValue(item["reviewer"]),
-					RankReason:   stringValue(item["rank_reason"]),
+					ArtifactID:       uintValue(item["artifact_id"]),
+					VersionID:        uintValue(item["version_id"]),
+					ImageRef:         stringValue(item["image_ref"]),
+					OverallScore:     float64Value(item["overall_score"]),
+					RequirementMatch: float64Value(item["requirement_match"]),
+					CompositionScore: float64Value(item["composition_score"]),
+					TextReadability:  float64Value(item["text_readability"]),
+					LayoutScore:      float64Value(item["layout_score"]),
+					RankScore:        float64Value(item["rank_score"]),
+					Issues:           parseIssueList(item["issues"]),
+					ShouldRefine:     boolValue(item["should_refine"]),
+					Reviewer:         stringValue(item["reviewer"]),
+					RankReason:       stringValue(item["rank_reason"]),
+					ExtractedText:    stringValue(item["extracted_text"]),
 				})
 			}
 		}

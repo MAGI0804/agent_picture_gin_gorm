@@ -83,6 +83,7 @@ type VisionReviewAgent struct {
 // VisionReviewAgentOptions configures real vision review.
 type VisionReviewAgentOptions struct {
 	VisionModelConfigID uint
+	OCRModelConfigID    uint
 	MinPassingScore     float64
 }
 
@@ -129,6 +130,7 @@ func (agent *VisionReviewAgent) Run(ctx context.Context, state domain.RunState) 
 	if err != nil {
 		return domain.StepResult{}, err
 	}
+	ocrTool, hasOCR := agent.findOCRTool(state.UserID)
 	reviews := make([]domain.CandidateReview, 0, len(targets))
 	bestScore := 0.0
 	bestIndex := 0
@@ -143,19 +145,40 @@ func (agent *VisionReviewAgent) Run(ctx context.Context, state domain.RunState) 
 		if err != nil {
 			return domain.StepResult{}, err
 		}
-		score := visionOverallScore(result)
-		shouldRefine := result.ShouldRefine || score < agent.options.MinPassingScore
+		ocrResult := tools.OCRResult{}
+		if hasOCR {
+			ocrResult, err = ocrTool.OCRProvider.ExtractText(ctx, tools.OCRRequest{
+				UserID:   state.UserID,
+				RunID:    state.RunID,
+				StepID:   state.CurrentStepID,
+				ImageRef: target.ImageRef,
+				Prompt:   ocrReviewPrompt(state, index+1),
+			})
+			if err != nil {
+				return domain.StepResult{}, err
+			}
+		}
+		review := composeCandidateReview(state, target, result, ocrResult, hasOCR, agent.options.MinPassingScore)
+		review.Reviewer = "real_vision_ocr_review"
+		if !hasOCR {
+			review.Reviewer = "real_vision_review"
+		}
 		reviews = append(reviews, domain.CandidateReview{
-			ArtifactID:   target.ArtifactID,
-			VersionID:    target.VersionID,
-			ImageRef:     target.ImageRef,
-			OverallScore: score,
-			Issues:       append([]string{}, result.Issues...),
-			ShouldRefine: shouldRefine,
-			Reviewer:     "real_vision_review",
+			ArtifactID:       review.ArtifactID,
+			VersionID:        review.VersionID,
+			ImageRef:         review.ImageRef,
+			OverallScore:     review.OverallScore,
+			RequirementMatch: review.RequirementMatch,
+			CompositionScore: review.CompositionScore,
+			TextReadability:  review.TextReadability,
+			LayoutScore:      review.LayoutScore,
+			Issues:           review.Issues,
+			ShouldRefine:     review.ShouldRefine,
+			Reviewer:         review.Reviewer,
+			ExtractedText:    review.ExtractedText,
 		})
-		if index == 0 || score > bestScore {
-			bestScore = score
+		if index == 0 || review.OverallScore > bestScore {
+			bestScore = review.OverallScore
 			bestIndex = index
 		}
 	}
@@ -163,10 +186,15 @@ func (agent *VisionReviewAgent) Run(ctx context.Context, state domain.RunState) 
 	shouldRefine := bestReview.ShouldRefine || bestReview.OverallScore < agent.options.MinPassingScore
 	output := map[string]interface{}{
 		"overall_score":     bestReview.OverallScore,
+		"requirement_match": bestReview.RequirementMatch,
+		"composition_score": bestReview.CompositionScore,
+		"text_readability":  bestReview.TextReadability,
+		"layout_score":      bestReview.LayoutScore,
 		"issues":            bestReview.Issues,
 		"should_refine":     shouldRefine,
 		"summary":           "best candidate " + strconv.Itoa(bestIndex+1),
-		"reviewer":          "real_vision_review",
+		"reviewer":          bestReview.Reviewer,
+		"extracted_text":    bestReview.ExtractedText,
 		"candidate_reviews": reviews,
 	}
 	return domain.StepResult{
@@ -174,6 +202,19 @@ func (agent *VisionReviewAgent) Run(ctx context.Context, state domain.RunState) 
 		Summary: "real vision review completed for image candidates",
 		Output:  output,
 	}, nil
+}
+
+func (agent *VisionReviewAgent) findOCRTool(userID uint) (tools.Tool, bool) {
+	modelConfigID := agent.options.OCRModelConfigID
+	if modelConfigID == 0 {
+		modelConfigID = agent.options.VisionModelConfigID
+	}
+	tool, err := agent.registry.FindTool(tools.FindToolRequest{
+		Kind:          tools.KindOCR,
+		UserID:        userID,
+		ModelConfigID: modelConfigID,
+	})
+	return tool, err == nil && tool.OCRProvider != nil
 }
 
 type candidateReviewTarget struct {
@@ -235,9 +276,113 @@ func visionOverallScore(result tools.VisionResult) float64 {
 	return clampScore(score)
 }
 
+func composeCandidateReview(
+	state domain.RunState,
+	target candidateReviewTarget,
+	visionResult tools.VisionResult,
+	ocrResult tools.OCRResult,
+	hasOCR bool,
+	minPassingScore float64,
+) domain.CandidateReview {
+	requirementMatch := scoreOrDefault(visionResult.Scores, "requirement_match", visionOverallScore(visionResult))
+	compositionScore := scoreOrDefault(visionResult.Scores, "composition_score", visionOverallScore(visionResult))
+	textReadability := scoreOrDefault(visionResult.Scores, "text_readability", 0)
+	layoutScore := scoreOrDefault(visionResult.Scores, "layout_score", compositionScore)
+	if hasOCR {
+		if ocrResult.TextReadability > 0 {
+			textReadability = clampScore(ocrResult.TextReadability)
+		}
+		if ocrResult.LayoutScore > 0 {
+			layoutScore = clampScore(ocrResult.LayoutScore)
+		}
+	}
+	overallScore := weightedReviewScore(visionOverallScore(visionResult), requirementMatch, compositionScore, textReadability, layoutScore, hasOCR)
+	issues := mergeIssues(visionResult.Issues, ocrResult.Issues)
+	unreadableText := hasOCR && requiresReadableText(state) && textReadability > 0 && textReadability < 0.6
+	if unreadableText {
+		issues = append(issues, "text is not readable enough for the requested poster or brand image")
+	}
+	shouldRefine := visionResult.ShouldRefine || ocrResult.ShouldRefine || unreadableText || overallScore < minPassingScore
+	return domain.CandidateReview{
+		ArtifactID:       target.ArtifactID,
+		VersionID:        target.VersionID,
+		ImageRef:         target.ImageRef,
+		OverallScore:     overallScore,
+		RequirementMatch: requirementMatch,
+		CompositionScore: compositionScore,
+		TextReadability:  textReadability,
+		LayoutScore:      layoutScore,
+		Issues:           issues,
+		ShouldRefine:     shouldRefine,
+		ExtractedText:    strings.TrimSpace(ocrResult.Text),
+	}
+}
+
+func weightedReviewScore(visionOverall float64, requirementMatch float64, compositionScore float64, textReadability float64, layoutScore float64, hasOCR bool) float64 {
+	if !hasOCR {
+		return clampScore(visionOverall)
+	}
+	if textReadability == 0 {
+		textReadability = visionOverall
+	}
+	if layoutScore == 0 {
+		layoutScore = compositionScore
+	}
+	return clampScore(visionOverall*0.35 + requirementMatch*0.25 + compositionScore*0.20 + textReadability*0.12 + layoutScore*0.08)
+}
+
+func scoreOrDefault(scores map[string]float64, key string, fallback float64) float64 {
+	if scores == nil {
+		return clampScore(fallback)
+	}
+	if score := scores[key]; score > 0 {
+		return clampScore(score)
+	}
+	return clampScore(fallback)
+}
+
+func mergeIssues(groups ...[]string) []string {
+	seen := map[string]bool{}
+	issues := []string{}
+	for _, group := range groups {
+		for _, issue := range group {
+			issue = strings.TrimSpace(issue)
+			if issue == "" || seen[issue] {
+				continue
+			}
+			seen[issue] = true
+			issues = append(issues, issue)
+		}
+	}
+	return issues
+}
+
+func requiresReadableText(state domain.RunState) bool {
+	value := strings.ToLower(strings.Join([]string{
+		state.UserRequest,
+		state.Requirements.TextPolicy,
+		state.Requirements.TargetUse,
+		strings.Join(state.Requirements.LayoutHints, " "),
+	}, " "))
+	for _, fragment := range []string{"poster", "brand", "logo", "text", "typography", "海报", "品牌", "文字", "中文", "标题"} {
+		if strings.Contains(value, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
 func visionReviewPrompt(state domain.RunState, candidateIndex int) string {
 	return strings.TrimSpace("Review this generated image against the user request. " +
-		"Return JSON with keys summary, overall_score, issues, should_refine. " +
+		"Return JSON with keys summary, overall_score, requirement_match, composition_score, text_readability, layout_score, issues, should_refine. " +
+		"Candidate index: " + strconv.Itoa(candidateIndex) + ". " +
+		"User request: " + state.UserRequest)
+}
+
+func ocrReviewPrompt(state domain.RunState, candidateIndex int) string {
+	return strings.TrimSpace("Extract visible text from this generated image and evaluate text readability and layout quality. " +
+		"Return JSON with keys text, text_readability, layout_score, issues, should_refine. " +
+		"Flag unreadable, garbled, misplaced, clipped, or low-contrast text as issues. " +
 		"Candidate index: " + strconv.Itoa(candidateIndex) + ". " +
 		"User request: " + state.UserRequest)
 }
@@ -264,6 +409,10 @@ func (agent *RankerAgent) Run(ctx context.Context, state domain.RunState) (domai
 			Summary: "ranker found no candidate review",
 			Output: map[string]interface{}{
 				"overall_score":     state.Review.OverallScore,
+				"requirement_match": state.Review.RequirementMatch,
+				"composition_score": state.Review.CompositionScore,
+				"text_readability":  state.Review.TextReadability,
+				"layout_score":      state.Review.LayoutScore,
 				"issues":            state.Review.Issues,
 				"should_refine":     state.Review.ShouldRefine,
 				"reviewer":          "ranker_agent",
@@ -293,10 +442,15 @@ func (agent *RankerAgent) Run(ctx context.Context, state domain.RunState) (domai
 		Summary: "ranked image candidates",
 		Output: map[string]interface{}{
 			"overall_score":     top.OverallScore,
+			"requirement_match": top.RequirementMatch,
+			"composition_score": top.CompositionScore,
+			"text_readability":  top.TextReadability,
+			"layout_score":      top.LayoutScore,
 			"rank_score":        top.RankScore,
 			"issues":            top.Issues,
 			"should_refine":     top.ShouldRefine,
 			"reviewer":          "ranker_agent",
+			"extracted_text":    top.ExtractedText,
 			"candidate_reviews": reviews,
 		},
 	}, nil

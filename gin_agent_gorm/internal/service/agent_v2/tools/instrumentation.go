@@ -31,6 +31,9 @@ func InstrumentTool(tool Tool, store InvocationStore) Tool {
 	if tool.VisionProvider != nil {
 		tool.VisionProvider = instrumentedVisionProvider{tool: tool, store: store, next: tool.VisionProvider}
 	}
+	if tool.OCRProvider != nil {
+		tool.OCRProvider = instrumentedOCRProvider{tool: tool, store: store, next: tool.OCRProvider}
+	}
 	return tool
 }
 
@@ -90,6 +93,23 @@ func (provider instrumentedVisionProvider) AnalyzeImage(ctx context.Context, req
 	}
 	result, err := provider.next.AnalyzeImage(ctx, request)
 	finishInvocation(provider.store, invocation.ID, startedAt, visionOutputSummary(result), provider.tool.Capability.CostPolicy, err)
+	return result, err
+}
+
+type instrumentedOCRProvider struct {
+	tool  Tool
+	store InvocationStore
+	next  OCRProvider
+}
+
+func (provider instrumentedOCRProvider) ExtractText(ctx context.Context, request OCRRequest) (OCRResult, error) {
+	startedAt := time.Now()
+	invocation, startErr := startInvocation(provider.store, provider.tool, request.UserID, request.RunID, request.StepID, ocrInputSummary(request), startedAt)
+	if startErr != nil {
+		return OCRResult{}, startErr
+	}
+	result, err := provider.next.ExtractText(ctx, request)
+	finishInvocation(provider.store, invocation.ID, startedAt, ocrOutputSummary(result), provider.tool.Capability.CostPolicy, err)
 	return result, err
 }
 
@@ -189,6 +209,23 @@ func visionOutputSummary(result VisionResult) map[string]interface{} {
 		"scores":        result.Scores,
 		"issues":        result.Issues,
 		"should_refine": result.ShouldRefine,
+	}
+}
+
+func ocrInputSummary(request OCRRequest) map[string]interface{} {
+	return map[string]interface{}{
+		"image_ref_present": strings.TrimSpace(request.ImageRef) != "",
+		"prompt_chars":      len(request.Prompt),
+	}
+}
+
+func ocrOutputSummary(result OCRResult) map[string]interface{} {
+	return map[string]interface{}{
+		"text_chars":       len(result.Text),
+		"text_readability": result.TextReadability,
+		"layout_score":     result.LayoutScore,
+		"issues":           result.Issues,
+		"should_refine":    result.ShouldRefine,
 	}
 }
 

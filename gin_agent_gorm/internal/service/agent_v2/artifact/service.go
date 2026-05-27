@@ -54,14 +54,19 @@ type SelectArtifactInput struct {
 
 // ReviewScoresInput records the review score for one artifact version.
 type ReviewScoresInput struct {
-	UserID       uint
-	ArtifactID   uint
-	VersionID    uint
-	OverallScore float64
-	RankScore    float64
-	Issues       []string
-	ShouldRefine bool
-	Reviewer     string
+	UserID           uint
+	ArtifactID       uint
+	VersionID        uint
+	OverallScore     float64
+	RequirementMatch float64
+	CompositionScore float64
+	TextReadability  float64
+	LayoutScore      float64
+	RankScore        float64
+	Issues           []string
+	ShouldRefine     bool
+	Reviewer         string
+	ExtractedText    string
 }
 
 // NewService 创建产物服务实例。
@@ -202,12 +207,19 @@ func (svc *Service) RecordReviewScores(input ReviewScoresInput) error {
 		rankScore = input.OverallScore
 	}
 	payload := map[string]interface{}{
-		"overall_score": input.OverallScore,
-		"rank_score":    rankScore,
-		"issues":        input.Issues,
-		"should_refine": input.ShouldRefine,
-		"reviewer":      coalesceReviewer(input.Reviewer),
-		"reviewed_at":   time.Now().Unix(),
+		"overall_score":     input.OverallScore,
+		"requirement_match": input.RequirementMatch,
+		"composition_score": input.CompositionScore,
+		"text_readability":  input.TextReadability,
+		"layout_score":      input.LayoutScore,
+		"rank_score":        rankScore,
+		"issues":            input.Issues,
+		"should_refine":     input.ShouldRefine,
+		"reviewer":          coalesceReviewer(input.Reviewer),
+		"reviewed_at":       time.Now().Unix(),
+	}
+	if input.ExtractedText != "" {
+		payload["extracted_text"] = input.ExtractedText
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {

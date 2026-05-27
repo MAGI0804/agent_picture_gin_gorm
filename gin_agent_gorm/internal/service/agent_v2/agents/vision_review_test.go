@@ -184,6 +184,75 @@ func TestVisionReviewAgentReviewsEachArtifactCandidate(t *testing.T) {
 	}
 }
 
+func TestVisionReviewAgentMergesOCRScoresAndFlagsUnreadableText(t *testing.T) {
+	visionProvider := &fakeVisionProvider{
+		result: tools.VisionResult{
+			Summary: "poster with text",
+			Scores: map[string]float64{
+				"overall":           0.90,
+				"requirement_match": 0.88,
+				"composition_score": 0.80,
+			},
+		},
+	}
+	ocrProvider := &fakeOCRProvider{
+		result: tools.OCRResult{
+			Text:            "新品上市",
+			TextReadability: 0.42,
+			LayoutScore:     0.65,
+			Issues:          []string{"Chinese title is blurry"},
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:           "gemini-vision",
+		Kind:           tools.KindVision,
+		ModelConfigID:  7,
+		VisionProvider: visionProvider,
+	}); err != nil {
+		t.Fatalf("Register vision error = %v", err)
+	}
+	if err := registry.Register(tools.Tool{
+		Name:          "gemini-ocr",
+		Kind:          tools.KindOCR,
+		ModelConfigID: 7,
+		OCRProvider:   ocrProvider,
+	}); err != nil {
+		t.Fatalf("Register ocr error = %v", err)
+	}
+
+	agent := NewVisionReviewAgent(registry, VisionReviewAgentOptions{
+		VisionModelConfigID: 7,
+		OCRModelConfigID:    7,
+		MinPassingScore:     0.7,
+	})
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserID:      3,
+		RunID:       4,
+		UserRequest: "做一张中文品牌海报",
+		GeneratedImages: []domain.GeneratedImageRef{
+			{ObjectKey: "poster.png"},
+		},
+		Artifacts: []domain.ArtifactRef{{ID: 1, VersionID: 2, Kind: "image"}},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(ocrProvider.requests) != 1 {
+		t.Fatalf("ocr calls = %d, want 1", len(ocrProvider.requests))
+	}
+	reviews := result.Output["candidate_reviews"].([]domain.CandidateReview)
+	if reviews[0].TextReadability != 0.42 || reviews[0].LayoutScore != 0.65 {
+		t.Fatalf("ocr scores = %#v, want readability/layout from OCR", reviews[0])
+	}
+	if !reviews[0].ShouldRefine {
+		t.Fatal("ShouldRefine = false, want true for unreadable text")
+	}
+	if reviews[0].ExtractedText != "新品上市" {
+		t.Fatalf("ExtractedText = %q, want OCR text", reviews[0].ExtractedText)
+	}
+}
+
 func TestRankerAgentRanksCandidateReviews(t *testing.T) {
 	agent := NewRankerAgent()
 
@@ -236,5 +305,15 @@ func (provider *fakeVisionProvider) AnalyzeImage(ctx context.Context, request to
 			return result, nil
 		}
 	}
+	return provider.result, nil
+}
+
+type fakeOCRProvider struct {
+	requests []tools.OCRRequest
+	result   tools.OCRResult
+}
+
+func (provider *fakeOCRProvider) ExtractText(ctx context.Context, request tools.OCRRequest) (tools.OCRResult, error) {
+	provider.requests = append(provider.requests, request)
 	return provider.result, nil
 }

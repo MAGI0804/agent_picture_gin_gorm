@@ -13,6 +13,7 @@ type ImageGenerationWorkflowOptions struct {
 	TextModelConfigID   uint
 	ImageModelConfigID  uint
 	VisionModelConfigID uint
+	OCRModelConfigID    uint
 	CandidateCount      int
 	ModelProvider       string
 	ModelName           string
@@ -45,6 +46,7 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 	if options.Registry != nil && options.VisionModelConfigID > 0 {
 		reviewNode = agents.NewVisionReviewAgent(options.Registry, agents.VisionReviewAgentOptions{
 			VisionModelConfigID: options.VisionModelConfigID,
+			OCRModelConfigID:    options.OCRModelConfigID,
 			MinPassingScore:     0.7,
 		})
 	}

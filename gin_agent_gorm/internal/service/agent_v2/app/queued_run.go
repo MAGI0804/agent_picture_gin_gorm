@@ -155,6 +155,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 	if visionConfigID > 0 {
 		if visionConfig, err := svc.resolveRuntimeModelConfig(userID, "text", visionConfigID); err == nil {
 			visionModelConfigID = visionConfig.GlobalID
+			visionProvider := tools.NewGoogleVisionProvider(visionConfig.Config)
 			_ = registry.Register(tools.InstrumentTool(tools.Tool{
 				Name:          runtimeTextModelName(visionConfig.Config),
 				Kind:          tools.KindVision,
@@ -165,11 +166,24 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 					SupportsImageInput: true,
 					CostPolicy:         "real_provider",
 				},
-				VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
+				VisionProvider: visionProvider,
+			}, svc.dao))
+			_ = registry.Register(tools.InstrumentTool(tools.Tool{
+				Name:          runtimeTextModelName(visionConfig.Config) + "-ocr",
+				Kind:          tools.KindOCR,
+				Provider:      visionConfig.Config.Provider,
+				Model:         runtimeTextModelName(visionConfig.Config),
+				ModelConfigID: visionConfig.GlobalID,
+				Capability: tools.Capability{
+					SupportsImageInput: true,
+					CostPolicy:         "real_provider",
+				},
+				OCRProvider: visionProvider,
 			}, svc.dao))
 		}
 	} else if visionConfig, err := svc.resolveVisionRuntimeModelConfig(userID); err == nil {
 		visionModelConfigID = visionConfig.GlobalID
+		visionProvider := tools.NewGoogleVisionProvider(visionConfig.Config)
 		_ = registry.Register(tools.InstrumentTool(tools.Tool{
 			Name:          runtimeTextModelName(visionConfig.Config),
 			Kind:          tools.KindVision,
@@ -180,7 +194,19 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 				SupportsImageInput: true,
 				CostPolicy:         "real_provider",
 			},
-			VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
+			VisionProvider: visionProvider,
+		}, svc.dao))
+		_ = registry.Register(tools.InstrumentTool(tools.Tool{
+			Name:          runtimeTextModelName(visionConfig.Config) + "-ocr",
+			Kind:          tools.KindOCR,
+			Provider:      visionConfig.Config.Provider,
+			Model:         runtimeTextModelName(visionConfig.Config),
+			ModelConfigID: visionConfig.GlobalID,
+			Capability: tools.Capability{
+				SupportsImageInput: true,
+				CostPolicy:         "real_provider",
+			},
+			OCRProvider: visionProvider,
 		}, svc.dao))
 	}
 
@@ -190,6 +216,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 		TextModelConfigID:   textModelConfigID,
 		ImageModelConfigID:  imageConfig.GlobalID,
 		VisionModelConfigID: visionModelConfigID,
+		OCRModelConfigID:    visionModelConfigID,
 		CandidateCount:      normalizeCandidateCount(state.Budget.MaxImageGenerations),
 		ModelProvider:       imageConfig.Config.Provider,
 		ModelName:           runtimeImageModelName(imageConfig.Config),

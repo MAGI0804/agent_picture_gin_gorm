@@ -102,20 +102,29 @@ type ArtifactRef struct {
 
 // CandidateReview stores per-candidate review and rank metadata.
 type CandidateReview struct {
-	ArtifactID   uint     `json:"artifact_id"`
-	VersionID    uint     `json:"version_id"`
-	ImageRef     string   `json:"image_ref"`
-	OverallScore float64  `json:"overall_score"`
-	RankScore    float64  `json:"rank_score"`
-	Issues       []string `json:"issues"`
-	ShouldRefine bool     `json:"should_refine"`
-	Reviewer     string   `json:"reviewer"`
-	RankReason   string   `json:"rank_reason"`
+	ArtifactID       uint     `json:"artifact_id"`
+	VersionID        uint     `json:"version_id"`
+	ImageRef         string   `json:"image_ref"`
+	OverallScore     float64  `json:"overall_score"`
+	RequirementMatch float64  `json:"requirement_match"`
+	CompositionScore float64  `json:"composition_score"`
+	TextReadability  float64  `json:"text_readability"`
+	LayoutScore      float64  `json:"layout_score"`
+	RankScore        float64  `json:"rank_score"`
+	Issues           []string `json:"issues"`
+	ShouldRefine     bool     `json:"should_refine"`
+	Reviewer         string   `json:"reviewer"`
+	RankReason       string   `json:"rank_reason"`
+	ExtractedText    string   `json:"extracted_text"`
 }
 
 // ReviewResult 审核结果
 type ReviewResult struct {
 	OverallScore     float64           `json:"overall_score"`
+	RequirementMatch float64           `json:"requirement_match"`
+	CompositionScore float64           `json:"composition_score"`
+	TextReadability  float64           `json:"text_readability"`
+	LayoutScore      float64           `json:"layout_score"`
 	Issues           []string          `json:"issues"`
 	ShouldRefine     bool              `json:"should_refine"`
 	Reviewer         string            `json:"reviewer"`
