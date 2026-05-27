@@ -239,9 +239,22 @@
             <div>
               <strong>{{ memory.namespace || memory.kind }}</strong>
               <p>{{ memory.content }}</p>
-              <small>{{ formatConfidence(memory.confidence) }} · used {{ memory.use_count || 0 }}</small>
+              <small>
+                {{ formatConfidence(memory.confidence) }} · used {{ memory.use_count || 0 }}
+                <span v-if="isMemoryProposal(memory)" class="v2-memory-proposal-badge">候选</span>
+              </small>
             </div>
-            <button type="button" @click="deleteMemory(memory.id)">删除</button>
+            <div class="v2-memory-actions">
+              <button
+                v-if="isMemoryProposal(memory)"
+                type="button"
+                :disabled="promotingMemoryId === memory.id"
+                @click="promoteMemory(memory.id)"
+              >
+                {{ promotingMemoryId === memory.id ? '确认中...' : '确认' }}
+              </button>
+              <button type="button" @click="deleteMemory(memory.id)">删除</button>
+            </div>
           </li>
         </ul>
         <p v-else class="muted">暂无记忆。</p>
@@ -290,6 +303,7 @@ const previewURLs = ref<Record<number, string>>({})
 const memories = ref<ContextMemory[]>([])
 const memoryNamespace = ref('')
 const memoryLoading = ref(false)
+const promotingMemoryId = ref(0)
 
 interface QualityScores {
   overall_score?: number
@@ -509,6 +523,23 @@ async function deleteMemory(id: number) {
   memories.value = memories.value.filter(item => item.id !== id)
 }
 
+async function promoteMemory(id: number) {
+  if (promotingMemoryId.value) return
+  promotingMemoryId.value = id
+  errorMessage.value = ''
+  try {
+    await apiFetch<{ memory: ContextMemory; promoted: boolean }>(`/api/v2/memories/${id}/promote`, {
+      method: 'POST',
+      body: JSON.stringify({ confidence: 0.85 })
+    })
+    await loadMemories()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '记忆确认失败'
+  } finally {
+    promotingMemoryId.value = 0
+  }
+}
+
 async function preloadArtifactPreviews(items: Artifact[]) {
   await Promise.all(items.filter(item => item.kind === 'image').map(async item => {
     if (previewURLs.value[item.id]) return
@@ -568,6 +599,10 @@ function formatScore(score?: number) {
 function formatConfidence(confidence?: number) {
   if (typeof confidence !== 'number' || confidence <= 0) return 'confidence -'
   return `confidence ${Math.round(confidence * 100)}`
+}
+
+function isMemoryProposal(memory: ContextMemory) {
+  return memory.kind === 'memory_proposal'
 }
 
 function summarizeStep(step: AgentStep) {

@@ -2125,10 +2125,35 @@ p {
   min-width: 0;
 }
 
-.v2-memory-list button {
+.v2-memory-actions {
+  display: grid;
+  gap: 6px;
+}
+
+.v2-memory-actions button {
   min-height: 30px;
   padding: 0 9px;
+}
+
+.v2-memory-actions button:first-child {
+  color: #111111;
+}
+
+.v2-memory-actions button:last-child {
   color: #b3261e;
+}
+
+.v2-memory-proposal-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-left: 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: #111111;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .v2-feedback {
