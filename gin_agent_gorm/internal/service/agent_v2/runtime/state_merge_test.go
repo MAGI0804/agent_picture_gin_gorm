@@ -19,6 +19,11 @@ func TestApplyStepResultMergesRealImageWorkflowOutputs(t *testing.T) {
 			"must_avoid":         []string{"blur"},
 			"need_clarification": false,
 			"questions":          []string{},
+			"scene":              "sunlit cafe counter",
+			"composition":        "centered cup with headline space",
+			"text_policy":        "render text separately",
+			"layout_hints":       []string{"top headline space"},
+			"target_use":         "mobile poster",
 		},
 	})
 	state = applyStepResult(state, "prompt_agent", domain.StepResult{
@@ -49,6 +54,12 @@ func TestApplyStepResultMergesRealImageWorkflowOutputs(t *testing.T) {
 
 	if state.Requirements.Subject != "coffee poster" {
 		t.Fatalf("Subject = %q, want coffee poster", state.Requirements.Subject)
+	}
+	if state.Requirements.Scene != "sunlit cafe counter" {
+		t.Fatalf("Scene = %q, want sunlit cafe counter", state.Requirements.Scene)
+	}
+	if len(state.Requirements.LayoutHints) != 1 || state.Requirements.LayoutHints[0] != "top headline space" {
+		t.Fatalf("LayoutHints = %#v, want top headline space", state.Requirements.LayoutHints)
 	}
 	if state.Prompts.NegativePrompt != "blur, watermark" {
 		t.Fatalf("NegativePrompt = %q, want blur, watermark", state.Prompts.NegativePrompt)

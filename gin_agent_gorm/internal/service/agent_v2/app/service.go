@@ -171,6 +171,7 @@ func (svc *Service) createRun(
 		Model:         runtimeImageModelName(imageConfig.Config),
 		ModelConfigID: imageConfig.GlobalID,
 		Capability: tools.Capability{
+			MaxPromptChars:  8000,
 			SupportedRatios: []string{"1:1", "4:3", "16:9", "9:16"},
 			MaxCandidates:   3,
 			CostPolicy:      "real_provider",
@@ -284,6 +285,7 @@ func (svc *Service) createRun(
 	flow := workflow.ImageGenerationWorkflow(workflow.ImageGenerationWorkflowOptions{
 		Registry:            registry,
 		ArtifactWriter:      svc.artifacts,
+		TextModelConfigID:   textConfig.GlobalID,
 		ImageModelConfigID:  imageConfig.GlobalID,
 		VisionModelConfigID: visionConfig.GlobalID,
 		CandidateCount:      normalizeCandidateCount(request.CandidateCount),

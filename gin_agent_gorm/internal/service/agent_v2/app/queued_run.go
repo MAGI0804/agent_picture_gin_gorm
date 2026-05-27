@@ -117,6 +117,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 		Model:         runtimeImageModelName(imageConfig.Config),
 		ModelConfigID: imageConfig.GlobalID,
 		Capability: tools.Capability{
+			MaxPromptChars:  8000,
 			SupportedRatios: []string{"1:1", "4:3", "16:9", "9:16"},
 			MaxCandidates:   3,
 			CostPolicy:      "real_provider",
@@ -182,6 +183,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 	return workflow.ImageGenerationWorkflow(workflow.ImageGenerationWorkflowOptions{
 		Registry:            registry,
 		ArtifactWriter:      svc.artifacts,
+		TextModelConfigID:   textModelConfigID,
 		ImageModelConfigID:  imageConfig.GlobalID,
 		VisionModelConfigID: visionModelConfigID,
 		CandidateCount:      normalizeCandidateCount(state.Budget.MaxImageGenerations),

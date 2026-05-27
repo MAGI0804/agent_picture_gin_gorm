@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"gin-biz-web-api/internal/service/agent_v2/domain"
@@ -18,6 +19,19 @@ func (provider *fakeImageProvider) GenerateImage(
 	ctx context.Context,
 	request tools.ImageGenerationRequest,
 ) (tools.ImageGenerationResult, error) {
+	provider.request = request
+	return provider.result, nil
+}
+
+type fakeTextProvider struct {
+	request tools.TextRequest
+	result  tools.TextResult
+}
+
+func (provider *fakeTextProvider) GenerateText(
+	ctx context.Context,
+	request tools.TextRequest,
+) (tools.TextResult, error) {
 	provider.request = request
 	return provider.result, nil
 }
@@ -45,6 +59,193 @@ func (writer *fakeArtifactWriter) CreateCandidateGroup(
 		versions = append(versions, model.ArtifactVersion{BaseModel: model.BaseModel{ID: uint(index + 20)}})
 	}
 	return artifacts, versions, nil
+}
+
+func TestRequirementAgentUsesTextProviderStructuredJSON(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{
+			Text: `{
+				"subject": "coffee launch poster",
+				"style": "editorial product photography",
+				"aspect_ratio": "9:16",
+				"must_include": ["coffee cup", "launch headline"],
+				"must_avoid": ["watermark"],
+				"need_clarification": false,
+				"questions": [],
+				"scene": "sunlit cafe counter",
+				"composition": "centered cup with headline space",
+				"text_policy": "render text separately",
+				"layout_hints": ["leave top third empty", "strong product focus"],
+				"target_use": "mobile poster"
+			}`,
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	agent := NewRequirementAgentWithText(registry, 7)
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		RunID:         3,
+		CurrentStepID: 4,
+		UserID:        5,
+		UserRequest:   "Make a vertical coffee launch poster",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if textProvider.request.UserID != 5 || textProvider.request.RunID != 3 || textProvider.request.StepID != 4 {
+		t.Fatalf("text request scope = %#v, want run/user/step scope", textProvider.request)
+	}
+	if result.Output["subject"] != "coffee launch poster" {
+		t.Fatalf("subject = %#v, want provider subject", result.Output["subject"])
+	}
+	if result.Output["scene"] != "sunlit cafe counter" {
+		t.Fatalf("scene = %#v, want provider scene", result.Output["scene"])
+	}
+	layoutHints, ok := result.Output["layout_hints"].([]string)
+	if !ok || len(layoutHints) != 2 {
+		t.Fatalf("layout_hints = %#v, want provider hints", result.Output["layout_hints"])
+	}
+}
+
+func TestRequirementAgentFallsBackOnInvalidProviderJSON(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{Text: "not json"},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	agent := NewRequirementAgentWithText(registry, 7)
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserRequest: "square product photo with logo",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output["subject"] != "square product photo with logo" {
+		t.Fatalf("subject = %#v, want rule fallback", result.Output["subject"])
+	}
+	issues, ok := result.Output["schema_issues"].([]string)
+	if !ok || len(issues) == 0 {
+		t.Fatalf("schema_issues = %#v, want fallback issue", result.Output["schema_issues"])
+	}
+}
+
+func TestPromptAgentUsesTextProviderStructuredJSONAndMemory(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{
+			Text: `{
+				"positive_prompt": "premium coffee poster with emerald brand accent",
+				"negative_prompt": "blur, watermark",
+				"render_text_separately": false,
+				"params": {"aspect_ratio": "16:9", "seed_style": "editorial"}
+			}`,
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	agent := NewPromptAgentWithText(registry, 7)
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserRequest: "Make a coffee poster",
+		Requirements: domain.ImageRequirements{
+			Subject:     "coffee poster",
+			Style:       "editorial",
+			AspectRatio: "16:9",
+		},
+		MemoryContext: []domain.MemoryItem{
+			{Content: "Brand accent color is emerald", Confidence: 0.92},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(textProvider.request.Prompt, "Brand accent color is emerald") {
+		t.Fatalf("provider prompt = %q, want memory context", textProvider.request.Prompt)
+	}
+	if result.Output["positive_prompt"] != "premium coffee poster with emerald brand accent" {
+		t.Fatalf("positive_prompt = %#v, want provider prompt", result.Output["positive_prompt"])
+	}
+	params, ok := result.Output["params"].(map[string]string)
+	if !ok || params["seed_style"] != "editorial" {
+		t.Fatalf("params = %#v, want provider params", result.Output["params"])
+	}
+}
+
+func TestPromptAgentFallsBackOnInvalidProviderJSON(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{Text: "not json"},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	agent := NewPromptAgentWithText(registry, 7)
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserRequest: "Make a coffee poster",
+		Requirements: domain.ImageRequirements{
+			Subject:     "coffee poster",
+			Style:       "editorial",
+			AspectRatio: "16:9",
+			MustAvoid:   []string{"blur"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(result.Output["positive_prompt"].(string), "coffee poster") {
+		t.Fatalf("positive_prompt = %#v, want rule fallback", result.Output["positive_prompt"])
+	}
+	issues, ok := result.Output["schema_issues"].([]string)
+	if !ok || len(issues) == 0 {
+		t.Fatalf("schema_issues = %#v, want fallback issue", result.Output["schema_issues"])
+	}
+}
+
+func TestPromptAgentSetsRenderTextSeparatelyForChinesePoster(t *testing.T) {
+	agent := NewPromptAgent()
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		UserRequest: "制作中文咖啡新品海报，标题是夏日上新",
+		Requirements: domain.ImageRequirements{
+			Subject:     "中文咖啡新品海报，标题是夏日上新",
+			Style:       "poster design",
+			AspectRatio: "9:16",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output["render_text_separately"] != true {
+		t.Fatalf("render_text_separately = %#v, want true for Chinese poster text", result.Output["render_text_separately"])
+	}
 }
 
 func TestImageGenerationAgentUsesRegisteredImageTool(t *testing.T) {
@@ -108,6 +309,53 @@ func TestImageGenerationAgentUsesRegisteredImageTool(t *testing.T) {
 	}
 	if len(images) != 1 || images[0].ObjectKey != "object-key" {
 		t.Fatalf("generated images = %#v, want object-key", images)
+	}
+}
+
+func TestImageGenerationAgentAppliesToolCapabilityLimits(t *testing.T) {
+	provider := &fakeImageProvider{
+		result: tools.ImageGenerationResult{
+			Images: []tools.GeneratedImage{{ObjectKey: "object-key"}},
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "image-model",
+		Kind:          tools.KindImageGeneration,
+		ModelConfigID: 42,
+		Capability: tools.Capability{
+			MaxPromptChars:  24,
+			SupportedRatios: []string{"1:1"},
+			MaxCandidates:   1,
+		},
+		ImageGenerationProvider: provider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	agent := NewImageGenerationAgent(registry, ImageGenerationAgentOptions{
+		ImageModelConfigID: 42,
+		CandidateCount:     5,
+	})
+
+	_, err := agent.Run(context.Background(), domain.RunState{
+		Requirements: domain.ImageRequirements{
+			AspectRatio: "9:16",
+		},
+		Prompts: domain.PromptBundle{
+			PositivePrompt: strings.Repeat("detailed product prompt ", 4),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := len([]rune(provider.request.Prompt)); got > 24 {
+		t.Fatalf("prompt rune length = %d, want <= 24; prompt = %q", got, provider.request.Prompt)
+	}
+	if provider.request.AspectRatio != "1:1" {
+		t.Fatalf("AspectRatio = %q, want supported ratio fallback", provider.request.AspectRatio)
+	}
+	if provider.request.CandidateCount != 1 {
+		t.Fatalf("CandidateCount = %d, want capability max", provider.request.CandidateCount)
 	}
 }
 

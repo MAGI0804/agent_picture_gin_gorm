@@ -10,6 +10,7 @@ import (
 type ImageGenerationWorkflowOptions struct {
 	Registry            *tools.Registry
 	ArtifactWriter      agents.ArtifactWriter
+	TextModelConfigID   uint
 	ImageModelConfigID  uint
 	VisionModelConfigID uint
 	CandidateCount      int
@@ -51,9 +52,9 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 		"image_generation_v2",
 		"0.3.0",
 		agents.NewIntentRouterAgent(),
-		agents.NewRequirementAgent(),
+		agents.NewRequirementAgentWithText(options.Registry, options.TextModelConfigID),
 		agents.NewMemoryAgent(),
-		agents.NewPromptAgent(),
+		agents.NewPromptAgentWithText(options.Registry, options.TextModelConfigID),
 		agents.NewImageGenerationAgent(options.Registry, agents.ImageGenerationAgentOptions{
 			ImageModelConfigID: options.ImageModelConfigID,
 			CandidateCount:     options.CandidateCount,

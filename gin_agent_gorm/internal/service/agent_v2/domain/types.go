@@ -50,6 +50,11 @@ type ImageRequirements struct {
 	MustAvoid         []string `json:"must_avoid"`
 	NeedClarification bool     `json:"need_clarification"`
 	Questions         []string `json:"questions"`
+	Scene             string   `json:"scene"`
+	Composition       string   `json:"composition"`
+	TextPolicy        string   `json:"text_policy"`
+	LayoutHints       []string `json:"layout_hints"`
+	TargetUse         string   `json:"target_use"`
 }
 
 // MemoryItem 记忆项

@@ -513,6 +513,19 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 			state.Requirements.NeedClarification = needClarification
 		}
 		state.Requirements.Questions = parseIssueList(result.Output["questions"])
+		if scene, ok := result.Output["scene"].(string); ok {
+			state.Requirements.Scene = scene
+		}
+		if composition, ok := result.Output["composition"].(string); ok {
+			state.Requirements.Composition = composition
+		}
+		if textPolicy, ok := result.Output["text_policy"].(string); ok {
+			state.Requirements.TextPolicy = textPolicy
+		}
+		state.Requirements.LayoutHints = parseIssueList(result.Output["layout_hints"])
+		if targetUse, ok := result.Output["target_use"].(string); ok {
+			state.Requirements.TargetUse = targetUse
+		}
 	case "prompt_agent":
 		if prompt, ok := result.Output["positive_prompt"].(string); ok {
 			state.Prompts.PositivePrompt = prompt

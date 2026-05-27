@@ -42,7 +42,7 @@
 | 指南章节 | 要求 | 当前状态 | 已完成 | 未完成 / 风险 |
 | --- | --- | --- | --- | --- |
 | 5.1 共享任务状态 | 所有 Agent 读写同一份 `RunState` | 部分完成 | 已定义 `domain.RunState`，Runtime 会保存 `state_json`；新增 `GeneratedImages` 作为 Image Agent 到 Artifact Agent 的结构化交接 | `constraints`、完整 tool calls、完整 review/eval 结构仍不完整 |
-| 5.2 Agent 输入输出契约 | Agent 输出必须结构化，不只返回自然语言 | 部分完成 | `domain.StepResult` 已承载真实 Requirement/Prompt/Image/Artifact/Review Agent 输出；Runtime 合并结构化需求、prompt、图片、artifact 引用和 review 结果 | schema 校验未做；`questions/plan/tool_calls/eval_scores` 未完整建模 |
+| 5.2 Agent 输入输出契约 | Agent 输出必须结构化，不只返回自然语言 | 部分完成 | `domain.StepResult` 已承载真实 Requirement/Prompt/Image/Artifact/Review Agent 输出；Runtime 合并结构化需求、prompt、图片、artifact 引用和 review 结果；Requirement/Prompt 已有 schema 校验和 fallback | `questions/plan/tool_calls/eval_scores` 未完整建模 |
 | 5.3 Task Ledger | 每个 run 维护任务账本 | 已完成第一版 | 已新增 `task_ledger_items` model 和 DAO；Runtime 每个 workflow node 会写入/更新 ledger，记录状态、依赖、输入 hash、输出 step/hash、retry_count 和错误摘要 | 更细的 Planner 子任务拆解未做 |
 | 5.4 协同模式 | 支持顺序、Planner+Tools、Review、DAG、人工介入 | 部分完成 | 顺序 DAG 已支持；mock review 已接入主 workflow | 并行 DAG、Planner 动态工具、Human-in-the-loop、Refiner 未完成 |
 | 5.5 生产级协作约束 | 幂等、资源锁、预算、失败降级、可观测、安全边界 | 部分完成 | step hash、duration、run idempotency key、`idempotency_key_unique` 复合唯一策略、completed step 恢复复用、provider 临时错误重试、max_steps/max_image_generations/max_tool_calls/timeout_seconds 预算、running 超时批量失败方法、Task Ledger、Tool Invocation、稳定 cursor 事件轮询、基础权限查询、V2 preview 鉴权代理、access log token 脱敏已实现 | Redis lock、费用金额预算、失败降级、签名 URL 未完成 |
@@ -51,7 +51,7 @@
 
 | 指南章节 | 要求 | 当前状态 | 已完成 | 未完成 / 风险 |
 | --- | --- | --- | --- | --- |
-| 6 Agent 分工 | Intent、Requirement、Memory、Prompt、Image、Vision、Review、Refiner、Artifact、Evolution | 部分完成 | 已实现真实 Intent/Requirement/Memory/Prompt/Image/Artifact Agent 第一版；Google Vision Review 后端第一版已接入；artifact/eval service 基础 | Requirement/Prompt 仍是规则型第一版；Refiner/Evolution Agent 未完成；OCR/版面检测未接 |
+| 6 Agent 分工 | Intent、Requirement、Memory、Prompt、Image、Vision、Review、Refiner、Artifact、Evolution | 部分完成 | 已实现真实 Intent/Requirement/Memory/Prompt/Image/Artifact Agent；Requirement/Prompt 已接文本模型结构化 JSON 和规则 fallback；Google Vision Review 后端第一版已接入；artifact/eval service 基础 | Refiner/Evolution Agent 未完成；OCR/版面检测未接 |
 | 8.1 文生图工作流 | 文生图完整链路含追问、记忆、prompt、图片生成、artifact、review、refine | 部分完成 | V2 workflow `0.3.0` 已从 mock 切到真实 provider adapter + artifact version 写库，并支持真实 Google Vision Review 写 `quality_scores`；前端可展示 timeline、产物和 Review/Eval | 追问、人设记忆带入、自动 refine 尚未闭环；真实 Vision E2E 待代理/网络在线复验；OCR 未接 |
 | 8.2 图生图 / 图片编辑 | 上传、视觉分析、mask、编辑模型、版本链 | 未完成 | Tool 接口预留 ImageEdit/Segmentation | 上传图 V2 流程、Segmentation、Image Edit Agent 未完成 |
 | 8.3 品牌图 / 海报图 | 文字分层处理、HTML/Canvas 排版、Review | 未完成 | Prompt 结构里有 `render_text_separately` 字段 | HTML/Canvas Agent、中文文字 OCR 检查、可控排版未完成 |
@@ -81,15 +81,15 @@
 | --- | --- | --- | --- | --- |
 | 10 Provider 抽象升级 | Text/ImageGen/ImageEdit/Vision/Segmentation 分接口 | 部分完成 | Tool Registry 已定义 Text、ImageGeneration、ImageEdit、Vision、OCR、Segmentation、Safety 接口；新增旧 `HTTPProvider.Chat/Generate` 到 V2 `TextProvider`/`ImageGenerationProvider` 的 adapter；Google Gemini Vision provider 已接 `KindVision` | ImageEdit/OCR/Segmentation 仍未接真实 provider |
 | 10.1 图片工具链 | 接图片生成、VLM、OCR，后续 GroundingDINO/SAM | 部分完成 | 已接 Google Imagen 图片生成和 Google Gemini Vision Review 第一版 | OCR/GroundingDINO/SAM 均未接入 |
-| 21.5 Provider / Tool | Agent 只依赖能力，不依赖具体模型 | 部分完成 | Registry 支持 `FindTool(kind, user_id, model_config_id)`；Image Agent 已真实通过 Registry 查找图片生成工具 | Prompt Agent 第一版仍为规则型，未调用文本 provider；后续可切换为 provider 驱动的结构化 prompt |
+| 21.5 Provider / Tool | Agent 只依赖能力，不依赖具体模型 | 部分完成 | Registry 支持 `FindTool(kind, user_id, model_config_id)`；Requirement/Prompt Agent 已可通过 `TextProvider` 生成结构化 JSON；Image Agent 已真实通过 Registry 查找图片生成工具，并按 capability 限制 prompt 长度、比例和 candidate_count | ImageEdit/OCR/Segmentation 仍未接真实 provider |
 
 ### 2.7 Prompt 策略和图片文字处理
 
 | 指南章节 | 要求 | 当前状态 | 已完成 | 未完成 / 风险 |
 | --- | --- | --- | --- | --- |
-| 15.1 结构化需求 | Prompt Agent 先生成结构化需求 | 部分完成 | Requirement Agent 第一版已从用户输入抽取 subject/style/aspect_ratio/must_include/must_avoid/questions | scene/composition/text_policy/layout_hints 仍需更细建模和 schema 校验 |
-| 15.2 Prompt 输出 | positive/negative/layout_hints/render_text_separately | 部分完成 | Prompt Agent 第一版已输出 positive/negative/render_text_separately/params | layout_hints 未建模；尚未接文本模型生成更强 prompt |
-| 15.3 图片文字处理 | 中文海报底图和文字排版分离，OCR 检查 | 未完成 | 仅有策略字段预留 | HTML/Canvas/SVG 排版和 OCR 校验未完成 |
+| 15.1 结构化需求 | Prompt Agent 先生成结构化需求 | 已完成第一版 | Requirement Agent 已接 `TextProvider` 结构化 JSON，并扩展 subject/style/aspect_ratio/must_include/must_avoid/questions/scene/composition/text_policy/layout_hints/target_use；非法输出会 fallback 并记录 `schema_issues` | 追问暂停和用户补充恢复未完成 |
+| 15.2 Prompt 输出 | positive/negative/layout_hints/render_text_separately | 已完成第一版 | Prompt Agent 已接 `TextProvider` 结构化 JSON，输出 positive/negative/render_text_separately/params，并继续带入高置信稳定 memory | Prompt 版本治理和 eval promote/rollback 未完成 |
+| 15.3 图片文字处理 | 中文海报底图和文字排版分离，OCR 检查 | 部分完成 | Requirement/Prompt 已输出 `text_policy/layout_hints/render_text_separately`，中文海报默认 `render_text_separately=true` | HTML/Canvas/SVG 排版和 OCR 校验未完成 |
 
 ### 2.8 API 和前端体验
 
@@ -128,7 +128,7 @@
 | 4 | Artifact Service MVP | 已完成第一批 | 支持 artifact + version 创建、candidate group、选择产物、预览/下载鉴权入口、feedback 写入入口、review quality_scores 写入；V2 list/version/preview/download/feedback/select API 已接上 | edit/version parent 未完成 |
 | 5 | Tool Registry MVP | 已完成 | 支持按 kind/model_config_id 注册和查找工具；定义 Text/Image/Vision/OCR/Segmentation/Safety provider 接口；旧文本/图片 provider 已包装进 V2 tools | ImageEdit/Vision/OCR/Segmentation 真实 provider 未接入 |
 | 6 | Memory Service MVP | 已完成后端第二版 | 支持 namespace 查询、MarkUsed、写入、软删除、memory event；支持 proposal 去重合并、Promote 晋级和 Prompt 高置信记忆检索 | 尚未接向量检索和复杂冲突降权 |
-| 7 | 文生图真实链路 | 已完成第二批 | 实现真实 Requirement、Prompt、Image Generation、Artifact Agent；`/api/v2/conversations/:id/runs` 已执行 workflow `0.3.0`，调用真实 provider adapter、写 artifact/version，并接真实 Google Vision 或 mock review 写 quality_scores | Requirement/Prompt 仍是规则型；前端真实 `/workspace` 待冒烟；OCR/refine 未闭环 |
+| 7 | 文生图真实链路 | 已完成第三批 | 实现真实 Requirement、Prompt、Image Generation、Artifact Agent；`/api/v2/conversations/:id/runs` 已执行 workflow `0.3.0`，调用真实 provider adapter、写 artifact/version，并接真实 Google Vision 或 mock review 写 quality_scores；Requirement/Prompt 已接文本 provider 结构化 JSON 和 schema fallback | 前端真实 `/workspace` 待冒烟；OCR/refine 未闭环 |
 | 8 | v2 API 第一批 | 已完成第一批 | 已有 run 创建/查询/events；`/runs/async` 已投递 Asynq 持久任务；新增 memories 查询/删除/promote、artifact select；补齐 artifacts list、versions、preview、download、feedback；run 创建已从 mock workflow 切到真实 workflow；新增 `/runs/:id/cancel` 取消入口 | edit、memory patch、真正增量事件流未完成 |
 | 9 | 前端 V2 Workspace 第二批 | 已完成 | `/workspace` 支持输入、模型选择、运行、timeline、artifact board、versions、鉴权预览、download、feedback、选择按钮、Memory 入口、Review/Eval 面板 | 编辑/重生成、候选精排未完成 |
 | 10 | 权限校验 | 部分完成 | run 按 user 校验；artifact service/DAO 按 user 校验；memory 删除按 user 校验；V2 preview/download/feedback/list/version 按 user 校验；旧版 Chat preview 也已迁移到鉴权 API；access log 脱敏 token/query 并跳过二进制响应体；静态 `/artifacts` 默认关闭 | 签名 URL 未完成 |
@@ -236,16 +236,16 @@ npm run build
 | 2 | 给 V2 preview 增加鉴权代理或签名 URL，降低静态 `/artifacts` 直接暴露风险 | 已完成第二版 | 新增 `GET /api/v2/artifacts/:id/preview`；前端改为带 token header fetch blob；V2 列表/版本响应隐藏 object key 和静态 preview；预览/下载二进制响应不进 access log body，token/query 已脱敏；旧版 Chat 新增 `GET /api/artifacts/:id/preview` 并迁移到鉴权 blob 预览；`/artifacts` 静态路由默认关闭 | 签名 URL 未做 |
 | 3 | 接入真实 Vision/OCR Review，把质量分写入 `artifact_versions.quality_scores` | 已完成后端接入 | workflow `0.3.0` 已接 mock `vision_review_agent` 并写入 `artifact_versions.quality_scores`；本轮新增真实 `VisionReviewAgent`，可从 Tool Registry 调用 `VisionProvider` 并输出 `overall_score/issues/should_refine`；新增 Google Gemini Vision provider，支持 OpenAI-compatible multimodal chat，把本地 artifact 图片转 data URL 并解析 JSON 评分；`CreateRun` 会自动查找 `capability=vision` 的 Google 文本模型配置并注册 `KindVision`，有配置时 workflow 切到真实 review，无配置时回退 mock；前端 Review/Eval 可展示 | 真实外部 Vision E2E 待本地代理/网络在线后重跑 `googlee2e` 验证；复杂 OCR/版面检测仍未做 |
 | 4 | 补前端 artifact 选择按钮、Memory 入口、Review/Eval 面板 | 已完成 | `/workspace` 已接选择按钮、Memory 查询/删除入口、Review/Eval 面板和质量分展示 | 编辑/重生成、候选精排未做 |
-| 5 | 设计 V2 长任务异步化（Redis/Asynq 或现有任务队列），避免真实图片模型阻塞 HTTP 请求 | 已完成 Asynq 第一版 | 新增 [IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md](./IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md)，明确状态模型、API、队列、幂等、worker、前端轮询和验收；`POST /api/v2/conversations/:id/runs/async` 创建 run 后标记 `queued` 并投递 `agent_v2:run` Asynq 任务；worker 从 DB 读取 run/state/model config，抢占 `queued/failed -> running` 后执行现有 workflow；新增 `POST /api/v2/runs/:id/cancel`，可取消 `created/queued/running/waiting_user` 状态 run，executor 每步前后检查 `cancelled`，避免取消后继续推进到 `completed`；`/workspace` 已改为异步创建 run、2 秒轮询 timeline，终态后刷新 artifact/memory，并提供取消按钮 | 完整 step 幂等恢复、provider 错误分类、running 超时扫描和真正增量事件流仍待后续 Task 3/4 |
+| 5 | 设计 V2 长任务异步化（Redis/Asynq 或现有任务队列），避免真实图片模型阻塞 HTTP 请求 | 已完成 Asynq 第一版 | 新增 [IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md](./IMAGE_AGENT_V2_ASYNC_RUN_DESIGN.md)，明确状态模型、API、队列、幂等、worker、前端轮询和验收；`POST /api/v2/conversations/:id/runs/async` 创建 run 后标记 `queued` 并投递 `agent_v2:run` Asynq 任务；worker 从 DB 读取 run/state/model config，抢占 `queued/failed -> running` 后执行现有 workflow；新增 `POST /api/v2/runs/:id/cancel`，可取消 `created/queued/running/waiting_user` 状态 run，executor 每步前后检查 `cancelled`，避免取消后继续推进到 `completed`；`/workspace` 已改为异步创建 run、2 秒轮询 timeline，终态后刷新 artifact/memory，并提供取消按钮；Task 3/4 已补 completed step 恢复、provider 临时错误重试、预算、running 超时失败方法、ledger/tool invocation 和 cursor 轮询 | 真正长连接增量推送和真实外部模型稳定性仍需后续验收 |
 | 6 | 做 feedback/review 到 memory proposal 的闭环，避免用户选择和低分 review 只停留在单次记录 | 已完成第四版 | 新增 Memory Service proposal 能力：artifact selected/positive/negative/rating/comment 会写入 `context_memories`，以 `kind=memory_proposal` 标记；正向/选择反馈进入 `visual_style`，负向反馈和低分 review 进入 `reflection`；`memory_events` 会记录 created/merged/promoted 事件并保留 `agent_run_id/source/artifact`；同 scope proposal 会合并；新增 `POST /api/v2/memories/:id/promote` 晋级稳定记忆；CreateRun 会把高置信稳定偏好带入 Prompt Agent；前端 Memory 面板已对 `memory_proposal` 显示“候选”标记并提供人工确认按钮；重复命中同 scope proposal 时会提升置信度，达到阈值后自动晋级稳定记忆 | 语义去重、复杂冲突降权未做 |
 
 下一步建议：
 
 1. 用同一真实 Google 配置从前端 `/workspace` 手工发起一次生成，确认 artifact board、preview、download、feedback、Review/Eval 面板展示与后端 E2E 结果一致。
 2. 在代理/网络在线时重跑 `go test -tags googlee2e ./internal/service/agent_v2/app -run TestGoogleModelEndToEnd -v`，确认真实 Google Vision review 也写入 `artifact_versions.quality_scores`。
-3. 升级 Requirement / Prompt Agent 为文本模型驱动并加 schema 校验。
+3. 实现追问和 Human-in-the-loop 恢复，让 `NeedClarification/questions` 能暂停 run 并在用户补充后继续。
 4. 继续完善 `memory_proposal`：语义去重和稳定记忆冲突降权。
-5. 实现追问和 Human-in-the-loop 恢复。
+5. 推进候选图并行生成、逐张 Review 和 Ranker 精排。
 6. 后续如需要外链分享，再实现 artifact 短期签名 URL；当前前端预览已统一走鉴权 API，静态 `/artifacts` 默认关闭。
 
 ## 8. 更新日志
@@ -280,6 +280,7 @@ npm run build
 | 2026-05-27 | Task 2：Asynq 持久队列执行 Run | 新增 `agent_v2:run` Asynq 任务、payload 编解码、app 层 `RunQueue` 抽象、默认 Asynq 投递器和 worker 执行入口；`CreateRunAsync` 不再启动进程内 goroutine，而是落库 queued run 后投递队列；worker 从 DB 重建 RunState、模型配置和 workflow，并通过条件更新抢占 `queued/failed -> running` 后执行 | `go test ./internal/service/agent_v2/runtime ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers ./bootstrap ./job ./internal/dao/agent_v2_dao -count=1` 通过 |
 | 2026-05-27 | Task 3：Run 幂等、恢复、重试和预算 | 新增 `idempotency_key_unique` nullable 唯一键策略和 message/run 事务创建；Runtime 支持 completed step 按 input hash 复用、attempt 递增、`retrying` 状态、provider timeout/rate limit/网络错误重试、图片生成/tool call/总耗时预算；新增 running 超时批量失败方法 | `go test ./internal/service/agent_v2/runtime ./internal/service/agent_v2/app ./internal/dao/agent_v2_dao ./model ./bootstrap -count=1` 通过 |
 | 2026-05-27 | Task 4：Task Ledger、Tool Invocation 和增量事件 | Runtime 每个 node 写入 `task_ledger_items`；Tool provider 调用前后写 `tool_invocations`，记录 provider/model、输入输出摘要、duration、cost policy 和 error_code；`GET /api/v2/runs/:id` 返回三类追踪数据，`/events?cursor=` 支持稳定轮询；前端 timeline 展示 attempt、provider/model、耗时和错误摘要 | `go test ./internal/service/agent_v2/runtime ./internal/service/agent_v2/tools ./internal/service/agent_v2/app ./internal/dao/agent_v2_dao ./internal/controller/agent_v2_ctrl -count=1`、`npm run build` 通过 |
+| 2026-05-27 | Task 5：Requirement / Prompt 文本模型驱动和 schema 校验 | `ImageRequirements` 扩展 `scene/composition/text_policy/layout_hints/target_use`；Requirement/Prompt Agent 通过 `TextProvider` 生成结构化 JSON，非法输出或 provider 不可用时回退规则版本并记录 `schema_issues`；Prompt 继续带入高置信稳定 memory；Image Agent 按工具 capability 限制 prompt 长度、aspect_ratio 和 candidate_count；中文海报默认 `render_text_separately=true` | `go test ./internal/service/agent_v2/agents ./internal/service/agent_v2/runtime ./internal/service/agent_v2/workflow ./internal/service/agent_v2/app -count=1`、`go test ./... -count=1` 通过 |
 
 ## 9. Google 模型数据库配置
 
