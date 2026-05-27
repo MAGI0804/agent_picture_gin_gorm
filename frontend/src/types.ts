@@ -153,9 +153,49 @@ export interface AgentStep {
   step_key?: string
   attempt?: number
   duration_ms?: number
+  provider_name?: string
+  model_name?: string
+  error_code?: string
   input_hash?: string
   output_hash?: string
   output_json?: string
+}
+
+export interface TaskLedgerItem {
+  id: number
+  agent_run_id: number
+  task_key: string
+  owner_agent: string
+  status: string
+  depends_on_json?: string
+  input_refs_json?: string
+  output_refs_json?: string
+  retry_count?: number
+  error_message?: string
+  created_at?: number
+  updated_at?: number
+}
+
+export interface ToolInvocation {
+  id: number
+  agent_run_id: number
+  agent_step_id: number
+  user_id: number
+  tool_name: string
+  tool_kind: string
+  provider_name?: string
+  model_name?: string
+  status: string
+  input_json?: string
+  output_json?: string
+  cost_json?: string
+  duration_ms?: number
+  error_code?: string
+  error_message?: string
+  started_at?: number
+  completed_at?: number
+  created_at?: number
+  updated_at?: number
 }
 
 export interface ModelConfig {
@@ -183,6 +223,8 @@ export interface AgentV2RunResponse {
   assistant_message?: Message
   agent_run: AgentRun
   steps: AgentStep[]
+  task_ledger_items?: TaskLedgerItem[]
+  tool_invocations?: ToolInvocation[]
   artifacts?: Artifact[]
   state?: Record<string, unknown>
   idempotent?: boolean

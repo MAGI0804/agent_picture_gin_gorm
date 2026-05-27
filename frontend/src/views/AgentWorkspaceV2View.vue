@@ -92,16 +92,19 @@
       <section class="v2-timeline">
         <header>
           <strong>Timeline</strong>
-          <small>{{ steps.length }} steps</small>
+          <small>{{ steps.length }} steps · {{ toolInvocations.length }} tools</small>
         </header>
         <ol>
           <li v-for="step in steps" :key="step.id" :class="step.status">
             <div>
               <strong>{{ step.name }}</strong>
               <span>{{ step.status }}</span>
+              <small v-if="step.attempt">attempt {{ step.attempt }}</small>
               <small v-if="step.duration_ms">{{ step.duration_ms }}ms</small>
+              <small v-if="providerLabelForStep(step)">{{ providerLabelForStep(step) }}</small>
             </div>
             <p>{{ step.output || step.error_message || summarizeStep(step) }}</p>
+            <p v-if="errorLabelForStep(step)" class="muted">{{ errorLabelForStep(step) }}</p>
           </li>
         </ol>
         <p v-if="!steps.length" class="muted">暂无运行记录。</p>
@@ -278,7 +281,9 @@ import type {
   ArtifactVersion,
   Conversation,
   ContextMemory,
-  ModelSelection
+  ModelSelection,
+  TaskLedgerItem,
+  ToolInvocation
 } from '../types'
 
 const router = useRouter()
@@ -293,6 +298,8 @@ const running = ref(false)
 const errorMessage = ref('')
 const activeRun = ref<AgentRun | null>(null)
 const steps = ref<AgentStep[]>([])
+const taskLedgerItems = ref<TaskLedgerItem[]>([])
+const toolInvocations = ref<ToolInvocation[]>([])
 const artifacts = ref<Artifact[]>([])
 const selectedArtifact = ref<Artifact | null>(null)
 const versions = ref<ArtifactVersion[]>([])
@@ -389,6 +396,8 @@ async function openConversation(id: number) {
   activeConversationId.value = id
   activeRun.value = null
   steps.value = []
+  taskLedgerItems.value = []
+  toolInvocations.value = []
   selectedArtifact.value = null
   versions.value = []
   await Promise.all([loadArtifacts(), loadMemories()])
@@ -399,6 +408,8 @@ async function runAgent() {
   running.value = true
   errorMessage.value = ''
   steps.value = []
+  taskLedgerItems.value = []
+  toolInvocations.value = []
   try {
     const data = await apiFetch<AgentV2RunResponse>(`/api/v2/conversations/${activeConversationId.value}/runs/async`, {
       method: 'POST',
@@ -427,6 +438,8 @@ async function runAgent() {
 async function applyRunResponse(data: AgentV2RunResponse) {
   activeRun.value = data.agent_run
   steps.value = data.steps || []
+  taskLedgerItems.value = data.task_ledger_items || []
+  toolInvocations.value = data.tool_invocations || []
   artifacts.value = data.artifacts || []
   cleanupPreviewURLs(artifacts.value)
   await preloadArtifactPreviews(artifacts.value)
@@ -438,9 +451,11 @@ async function applyRunResponse(data: AgentV2RunResponse) {
 
 async function refreshRun() {
   if (!activeRunId.value) return
-  const data = await apiFetch<{ agent_run: AgentRun; steps: AgentStep[] }>(`/api/v2/runs/${activeRunId.value}`)
+  const data = await apiFetch<AgentV2RunResponse>(`/api/v2/runs/${activeRunId.value}`)
   activeRun.value = data.agent_run
   steps.value = data.steps || []
+  taskLedgerItems.value = data.task_ledger_items || []
+  toolInvocations.value = data.tool_invocations || []
   if (isTerminalRunStatus(data.agent_run.status)) {
     clearRunPolling()
     await loadArtifacts()
@@ -673,6 +688,31 @@ function summarizeStep(step: AgentStep) {
   } catch {
     return '已写入结构化输出'
   }
+}
+
+function toolForStep(step: AgentStep) {
+  return toolInvocations.value.find(tool => tool.agent_step_id === step.id) || null
+}
+
+function ledgerForStep(step: AgentStep) {
+  return taskLedgerItems.value.find(item => item.task_key === (step.step_key || step.name)) || null
+}
+
+function providerLabelForStep(step: AgentStep) {
+  const tool = toolForStep(step)
+  const provider = tool?.provider_name || step.provider_name
+  const model = tool?.model_name || step.model_name
+  if (!provider && !model) return ''
+  return [provider, model].filter(Boolean).join(' / ')
+}
+
+function errorLabelForStep(step: AgentStep) {
+  const tool = toolForStep(step)
+  const ledger = ledgerForStep(step)
+  const code = step.error_code || tool?.error_code
+  const message = step.error_message || tool?.error_message || ledger?.error_message
+  if (code && message) return `${code}: ${message}`
+  return code || message || ''
 }
 
 function formatTime(timestamp?: number) {

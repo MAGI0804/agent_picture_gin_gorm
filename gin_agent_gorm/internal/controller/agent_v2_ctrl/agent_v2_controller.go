@@ -99,9 +99,22 @@ func (ctrl *AgentV2Controller) RunEvents(c *gin.Context) {
 	if !ok {
 		return
 	}
-	steps, err := app.NewService().ListRunEvents(userID, runID)
+	cursor := 0
+	if rawCursor := c.Query("cursor"); rawCursor != "" {
+		parsed, err := strconv.Atoi(rawCursor)
+		if err != nil || parsed < 0 {
+			responses.New(c).ToErrorResponse(errcode.BadRequest, "cursor params error")
+			return
+		}
+		cursor = parsed
+	}
+	events, err := app.NewService().ListRunEvents(userID, runID, cursor)
 	if err != nil {
 		responses.New(c).ToErrorResponse(errcode.NotFound.WithDetails(err.Error()), "run not found")
+		return
+	}
+	if c.Query("format") == "json" || c.Query("cursor") != "" {
+		responses.New(c).ToResponse(events)
 		return
 	}
 
@@ -109,12 +122,13 @@ func (ctrl *AgentV2Controller) RunEvents(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Status(http.StatusOK)
-	for _, step := range steps {
-		payload, _ := json.Marshal(step)
-		_, _ = fmt.Fprintf(c.Writer, "event: agent_step\ndata: %s\n\n", string(payload))
+	for _, event := range events.Events {
+		payload, _ := json.Marshal(event)
+		_, _ = fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event.Type, string(payload))
 		c.Writer.Flush()
 	}
-	_, _ = fmt.Fprintf(c.Writer, "event: done\ndata: {}\n\n")
+	donePayload, _ := json.Marshal(gin.H{"cursor": events.Cursor})
+	_, _ = fmt.Fprintf(c.Writer, "event: done\ndata: %s\n\n", string(donePayload))
 	c.Writer.Flush()
 }
 

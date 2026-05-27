@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +73,23 @@ type ArtifactFeedbackRequest struct {
 	FeedbackType      string `json:"feedback_type" form:"feedback_type" binding:"required"`
 	Rating            int    `json:"rating" form:"rating"`
 	Comment           string `json:"comment" form:"comment"`
+}
+
+// RunEvent is a normalized polling/SSE event assembled from steps, ledger, and tool invocations.
+type RunEvent struct {
+	Cursor         int                   `json:"cursor"`
+	Type           string                `json:"type"`
+	ID             uint                  `json:"id"`
+	CreatedAt      int                   `json:"created_at"`
+	Step           *model.AgentStep      `json:"step,omitempty"`
+	LedgerItem     *model.TaskLedgerItem `json:"ledger_item,omitempty"`
+	ToolInvocation *model.ToolInvocation `json:"tool_invocation,omitempty"`
+}
+
+// RunEventsResponse is the stable polling response for run events.
+type RunEventsResponse struct {
+	Events []RunEvent `json:"events"`
+	Cursor int        `json:"cursor"`
 }
 
 // NewService 创建应用服务，并手动装配 DAO 与运行时执行器。
@@ -146,7 +164,7 @@ func (svc *Service) createRun(
 
 	registry := tools.NewRegistry()
 	imageAdapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
-	if err := registry.Register(tools.Tool{
+	if err := registry.Register(tools.InstrumentTool(tools.Tool{
 		Name:          runtimeImageModelName(imageConfig.Config),
 		Kind:          tools.KindImageGeneration,
 		Provider:      imageConfig.Config.Provider,
@@ -158,12 +176,12 @@ func (svc *Service) createRun(
 			CostPolicy:      "real_provider",
 		},
 		ImageGenerationProvider: imageAdapter,
-	}); err != nil {
+	}, svc.dao)); err != nil {
 		return nil, err
 	}
 	if textConfigErr == nil {
 		textAdapter := tools.NewLegacyProviderAdapter(textConfig.Config)
-		_ = registry.Register(tools.Tool{
+		_ = registry.Register(tools.InstrumentTool(tools.Tool{
 			Name:          runtimeTextModelName(textConfig.Config),
 			Kind:          tools.KindText,
 			Provider:      textConfig.Config.Provider,
@@ -174,10 +192,10 @@ func (svc *Service) createRun(
 				CostPolicy:     "real_provider",
 			},
 			TextProvider: textAdapter,
-		})
+		}, svc.dao))
 	}
 	if visionConfigErr == nil {
-		_ = registry.Register(tools.Tool{
+		_ = registry.Register(tools.InstrumentTool(tools.Tool{
 			Name:          runtimeTextModelName(visionConfig.Config),
 			Kind:          tools.KindVision,
 			Provider:      visionConfig.Config.Provider,
@@ -188,7 +206,7 @@ func (svc *Service) createRun(
 				CostPolicy:         "real_provider",
 			},
 			VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
-		})
+		}, svc.dao))
 	}
 
 	// 第二步：保存触发本次 Agent Run 的用户消息。
@@ -312,16 +330,28 @@ func (svc *Service) createRun(
 	finalState, assistantMessage, err := svc.executePreparedRun(ctx, userID, conversation, run, state, flow)
 	if err != nil {
 		steps, _ := svc.dao.ListSteps(userID, run.ID)
+		ledgerItems, _ := svc.dao.ListTaskLedgerItems(run.ID)
+		toolInvocations, _ := svc.dao.ListToolInvocationsByRun(userID, run.ID)
 		return map[string]interface{}{
-			"agent_run": run,
-			"steps":     steps,
-			"state":     finalState,
+			"agent_run":         run,
+			"steps":             steps,
+			"task_ledger_items": ledgerItems,
+			"tool_invocations":  toolInvocations,
+			"state":             finalState,
 		}, err
 	}
 
 	// 第六步：重新读取 run 和 steps，返回给前端作为第一版 timeline。
 	run, _ = svc.dao.FindRun(userID, run.ID)
 	steps, err := svc.dao.ListSteps(userID, run.ID)
+	if err != nil {
+		return nil, err
+	}
+	ledgerItems, err := svc.dao.ListTaskLedgerItems(run.ID)
+	if err != nil {
+		return nil, err
+	}
+	toolInvocations, err := svc.dao.ListToolInvocationsByRun(userID, run.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -336,6 +366,8 @@ func (svc *Service) createRun(
 		"assistant_message": assistantMessage,
 		"agent_run":         run,
 		"steps":             steps,
+		"task_ledger_items": ledgerItems,
+		"tool_invocations":  toolInvocations,
 		"artifacts":         publicArtifacts(artifacts),
 		"state":             finalState,
 	}, nil
@@ -381,9 +413,19 @@ func (svc *Service) GetRun(userID uint, runID uint) (map[string]interface{}, err
 	if err != nil {
 		return nil, err
 	}
+	ledgerItems, err := svc.dao.ListTaskLedgerItems(runID)
+	if err != nil {
+		return nil, err
+	}
+	toolInvocations, err := svc.dao.ListToolInvocationsByRun(userID, runID)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
-		"agent_run": run,
-		"steps":     steps,
+		"agent_run":         run,
+		"steps":             steps,
+		"task_ledger_items": ledgerItems,
+		"tool_invocations":  toolInvocations,
 	}, nil
 }
 
@@ -416,12 +458,35 @@ func (svc *Service) CancelRun(userID uint, runID uint) (map[string]interface{}, 
 	}, nil
 }
 
-// ListRunEvents 读取 SSE 事件源，目前直接复用 step timeline。
-func (svc *Service) ListRunEvents(userID uint, runID uint) ([]model.AgentStep, error) {
+// ListRunEvents assembles a stable cursor-based event list from steps, ledger, and tool invocations.
+func (svc *Service) ListRunEvents(userID uint, runID uint, cursor int) (RunEventsResponse, error) {
 	if _, err := svc.dao.FindRun(userID, runID); err != nil {
-		return nil, err
+		return RunEventsResponse{}, err
 	}
-	return svc.dao.ListSteps(userID, runID)
+	steps, err := svc.dao.ListSteps(userID, runID)
+	if err != nil {
+		return RunEventsResponse{}, err
+	}
+	ledgerItems, err := svc.dao.ListTaskLedgerItems(runID)
+	if err != nil {
+		return RunEventsResponse{}, err
+	}
+	toolInvocations, err := svc.dao.ListToolInvocationsByRun(userID, runID)
+	if err != nil {
+		return RunEventsResponse{}, err
+	}
+	events := buildRunEvents(steps, ledgerItems, toolInvocations)
+	filtered := make([]RunEvent, 0, len(events))
+	for _, event := range events {
+		if event.Cursor > cursor {
+			filtered = append(filtered, event)
+		}
+	}
+	nextCursor := cursor
+	if len(events) > 0 {
+		nextCursor = events[len(events)-1].Cursor
+	}
+	return RunEventsResponse{Events: filtered, Cursor: nextCursor}, nil
 }
 
 // SearchMemories 查询 V2 记忆。
@@ -597,11 +662,21 @@ func (svc *Service) idempotentRunResponse(conversation model.Conversation, userI
 	if err != nil {
 		return nil, err
 	}
+	ledgerItems, err := svc.dao.ListTaskLedgerItems(run.ID)
+	if err != nil {
+		return nil, err
+	}
+	toolInvocations, err := svc.dao.ListToolInvocationsByRun(userID, run.ID)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]interface{}{
-		"conversation": conversation,
-		"agent_run":    run,
-		"steps":        steps,
-		"idempotent":   true,
+		"conversation":      conversation,
+		"agent_run":         run,
+		"steps":             steps,
+		"task_ledger_items": ledgerItems,
+		"tool_invocations":  toolInvocations,
+		"idempotent":        true,
 	}, nil
 }
 
@@ -615,6 +690,50 @@ func (svc *Service) FailTimedOutRuns(timeoutSeconds int) (int64, error) {
 		cutoffUnix,
 		fmt.Sprintf("agent v2 run timed out after %d seconds", timeoutSeconds),
 	)
+}
+
+func buildRunEvents(steps []model.AgentStep, ledgerItems []model.TaskLedgerItem, toolInvocations []model.ToolInvocation) []RunEvent {
+	events := make([]RunEvent, 0, len(steps)+len(ledgerItems)+len(toolInvocations))
+	for index := range steps {
+		step := steps[index]
+		events = append(events, RunEvent{
+			Type:      "agent_step",
+			ID:        step.ID,
+			CreatedAt: step.CreatedAt,
+			Step:      &step,
+		})
+	}
+	for index := range ledgerItems {
+		item := ledgerItems[index]
+		events = append(events, RunEvent{
+			Type:       "task_ledger_item",
+			ID:         item.ID,
+			CreatedAt:  item.CreatedAt,
+			LedgerItem: &item,
+		})
+	}
+	for index := range toolInvocations {
+		invocation := toolInvocations[index]
+		events = append(events, RunEvent{
+			Type:           "tool_invocation",
+			ID:             invocation.ID,
+			CreatedAt:      invocation.CreatedAt,
+			ToolInvocation: &invocation,
+		})
+	}
+	sort.SliceStable(events, func(i int, j int) bool {
+		if events[i].CreatedAt != events[j].CreatedAt {
+			return events[i].CreatedAt < events[j].CreatedAt
+		}
+		if events[i].Type != events[j].Type {
+			return events[i].Type < events[j].Type
+		}
+		return events[i].ID < events[j].ID
+	})
+	for index := range events {
+		events[index].Cursor = index + 1
+	}
+	return events
 }
 
 func publicArtifacts(artifacts []model.Artifact) []model.Artifact {

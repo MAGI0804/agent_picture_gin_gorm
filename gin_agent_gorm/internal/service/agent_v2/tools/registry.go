@@ -149,6 +149,9 @@ type SafetyProvider interface {
 }
 
 type TextRequest struct {
+	UserID   uint
+	RunID    uint
+	StepID   uint
 	System   string
 	Prompt   string
 	Messages []TextMessage
@@ -168,6 +171,7 @@ type ImageGenerationRequest struct {
 	UserID         uint
 	ConversationID uint
 	RunID          uint
+	StepID         uint
 	TaskType       string
 	Intent         string
 	Prompt         string
@@ -202,6 +206,9 @@ type ImageEditResult struct {
 }
 
 type VisionRequest struct {
+	UserID   uint
+	RunID    uint
+	StepID   uint
 	ImageRef string
 	Prompt   string
 }

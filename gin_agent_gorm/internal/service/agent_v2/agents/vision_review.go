@@ -110,6 +110,9 @@ func (agent *VisionReviewAgent) Run(ctx context.Context, state domain.RunState) 
 		return domain.StepResult{}, err
 	}
 	result, err := tool.VisionProvider.AnalyzeImage(ctx, tools.VisionRequest{
+		UserID:   state.UserID,
+		RunID:    state.RunID,
+		StepID:   state.CurrentStepID,
 		ImageRef: imageRef,
 		Prompt:   visionReviewPrompt(state),
 	})

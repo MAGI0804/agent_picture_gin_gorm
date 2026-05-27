@@ -26,6 +26,9 @@ type Repository interface {
 	MaxStepAttempt(runID uint, stepKey string, inputHash string) (int, error)
 	CountStepAttempts(runID uint) (int, error)
 	CountStepAttemptsByKey(runID uint, stepKey string) (int, error)
+	FindTaskLedgerItem(runID uint, taskKey string) (model.TaskLedgerItem, bool, error)
+	CreateTaskLedgerItem(item *model.TaskLedgerItem) error
+	UpdateTaskLedgerItem(itemID uint, attrs map[string]interface{}) error
 }
 
 // Executor advances a workflow and records every step attempt.
@@ -94,6 +97,11 @@ func (executor *Executor) Execute(
 
 		inputJSON := mustJSON(state)
 		inputHash := hashText(inputJSON)
+		ledgerItem, err := executor.ensureTaskLedgerItem(state.RunID, node.Key(), flow.Dependencies[node.Key()], inputHash)
+		if err != nil {
+			_ = executor.failRun(state.RunID, err)
+			return state, err
+		}
 		reusableStep, ok, err := executor.repo.FindReusableStep(state.RunID, node.Key(), inputHash)
 		if err != nil {
 			_ = executor.failRun(state.RunID, err)
@@ -102,6 +110,14 @@ func (executor *Executor) Execute(
 		if ok {
 			result, err := stepResultFromCompletedStep(reusableStep)
 			if err != nil {
+				_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+					"status":        domain.StepStatusFailed,
+					"error_message": err.Error(),
+				})
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
+			if err := executor.updateLedgerCompleted(ledgerItem.ID, reusableStep.ID, reusableStep.OutputHash, reusableStep.Attempt-1); err != nil {
 				_ = executor.failRun(state.RunID, err)
 				return state, err
 			}
@@ -127,10 +143,20 @@ func (executor *Executor) Execute(
 		completed := false
 		for attempt := lastAttempt + 1; attempt <= executor.maxAttempts; attempt++ {
 			if err := executor.ensureWithinTimeoutBudget(state, startedAt); err != nil {
+				_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+					"status":        domain.StepStatusFailed,
+					"error_message": err.Error(),
+					"retry_count":   maxInt(attempt-1, 0),
+				})
 				_ = executor.failRun(state.RunID, err)
 				return state, err
 			}
 			if err := executor.consumeAttemptBudget(state, &usage, node.Key()); err != nil {
+				_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+					"status":        domain.StepStatusFailed,
+					"error_message": err.Error(),
+					"retry_count":   maxInt(attempt-1, 0),
+				})
 				_ = executor.failRun(state.RunID, err)
 				return state, err
 			}
@@ -151,7 +177,9 @@ func (executor *Executor) Execute(
 				return state, err
 			}
 
-			result, err := node.Run(ctx, state)
+			executionState := state
+			executionState.CurrentStepID = step.ID
+			result, err := node.Run(ctx, executionState)
 			durationMS := executor.now().Sub(start).Milliseconds()
 			if cancelErr := executor.ensureRunNotCancelled(state.RunID); cancelErr != nil {
 				_ = executor.repo.UpdateStep(step.ID, map[string]interface{}{
@@ -159,6 +187,11 @@ func (executor *Executor) Execute(
 					"error_message": cancelErr.Error(),
 					"error_code":    "cancelled",
 					"duration_ms":   durationMS,
+				})
+				_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+					"status":        domain.StepStatusCancelled,
+					"error_message": cancelErr.Error(),
+					"retry_count":   maxInt(attempt-1, 0),
 				})
 				return state, cancelErr
 			}
@@ -174,8 +207,21 @@ func (executor *Executor) Execute(
 					"duration_ms":   durationMS,
 				})
 				if status == domain.StepStatusRetrying {
+					if ledgerErr := executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+						"status":        domain.StepStatusRetrying,
+						"error_message": err.Error(),
+						"retry_count":   attempt,
+					}); ledgerErr != nil {
+						_ = executor.failRun(state.RunID, ledgerErr)
+						return state, ledgerErr
+					}
 					continue
 				}
+				_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+					"status":        domain.StepStatusFailed,
+					"error_message": err.Error(),
+					"retry_count":   maxInt(attempt-1, 0),
+				})
 				_ = executor.failRun(state.RunID, err)
 				return state, err
 			}
@@ -185,6 +231,11 @@ func (executor *Executor) Execute(
 					"error_message": err.Error(),
 					"error_code":    "timeout_budget_exceeded",
 					"duration_ms":   durationMS,
+				})
+				_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+					"status":        domain.StepStatusFailed,
+					"error_message": err.Error(),
+					"retry_count":   maxInt(attempt-1, 0),
 				})
 				_ = executor.failRun(state.RunID, err)
 				return state, err
@@ -204,6 +255,10 @@ func (executor *Executor) Execute(
 				_ = executor.failRun(state.RunID, err)
 				return state, err
 			}
+			if err := executor.updateLedgerCompleted(ledgerItem.ID, step.ID, hashText(outputJSON), maxInt(attempt-1, 0)); err != nil {
+				_ = executor.failRun(state.RunID, err)
+				return state, err
+			}
 
 			state = applyStepResult(state, node.Key(), result)
 			if err := executor.saveState(state); err != nil {
@@ -215,6 +270,11 @@ func (executor *Executor) Execute(
 		}
 		if !completed {
 			err := errors.Errorf("step %s retry budget exhausted after %d attempts", node.Key(), executor.maxAttempts)
+			_ = executor.updateLedger(ledgerItem.ID, map[string]interface{}{
+				"status":        domain.StepStatusFailed,
+				"error_message": err.Error(),
+				"retry_count":   executor.maxAttempts - 1,
+			})
 			_ = executor.failRun(state.RunID, err)
 			return state, err
 		}
@@ -251,6 +311,54 @@ func (executor *Executor) initialBudgetUsage(runID uint) (budgetUsage, error) {
 		toolCalls:        toolCalls,
 		imageGenerations: imageGenerations,
 	}, nil
+}
+
+func (executor *Executor) ensureTaskLedgerItem(runID uint, taskKey string, dependencies []string, inputHash string) (model.TaskLedgerItem, error) {
+	item, ok, err := executor.repo.FindTaskLedgerItem(runID, taskKey)
+	if err != nil {
+		return item, err
+	}
+	inputRefsJSON := mustJSON(map[string]interface{}{
+		"input_hash": inputHash,
+	})
+	if ok {
+		err = executor.updateLedger(item.ID, map[string]interface{}{
+			"status":          domain.StepStatusRunning,
+			"depends_on_json": mustJSON(dependencies),
+			"input_refs_json": inputRefsJSON,
+			"error_message":   "",
+		})
+		return item, err
+	}
+	item = model.TaskLedgerItem{
+		AgentRunID:    runID,
+		TaskKey:       taskKey,
+		OwnerAgent:    taskKey,
+		Status:        domain.StepStatusRunning,
+		DependsOnJSON: mustJSON(dependencies),
+		InputRefsJSON: inputRefsJSON,
+	}
+	err = executor.repo.CreateTaskLedgerItem(&item)
+	return item, err
+}
+
+func (executor *Executor) updateLedgerCompleted(itemID uint, stepID uint, outputHash string, retryCount int) error {
+	return executor.updateLedger(itemID, map[string]interface{}{
+		"status": domain.StepStatusCompleted,
+		"output_refs_json": mustJSON(map[string]interface{}{
+			"step_id":     stepID,
+			"output_hash": outputHash,
+		}),
+		"retry_count":   maxInt(retryCount, 0),
+		"error_message": "",
+	})
+}
+
+func (executor *Executor) updateLedger(itemID uint, attrs map[string]interface{}) error {
+	if itemID == 0 {
+		return nil
+	}
+	return executor.repo.UpdateTaskLedgerItem(itemID, attrs)
 }
 
 func (executor *Executor) saveState(state domain.RunState) error {
@@ -499,6 +607,13 @@ func int64Value(value interface{}) int64 {
 	default:
 		return 0
 	}
+}
+
+func maxInt(left int, right int) int {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func parseIssueList(value interface{}) []string {

@@ -130,6 +130,12 @@ func TestExecutorRetriesRetryableProviderError(t *testing.T) {
 	if repo.steps[1].Attempt != 2 || repo.steps[1].Status != domain.StepStatusCompleted {
 		t.Fatalf("second attempt = %#v, want attempt 2 completed", repo.steps[1])
 	}
+	if len(repo.ledgerItems) != 1 {
+		t.Fatalf("ledger item count = %d, want 1", len(repo.ledgerItems))
+	}
+	if repo.ledgerItems[0].Status != domain.StepStatusCompleted || repo.ledgerItems[0].RetryCount != 1 {
+		t.Fatalf("ledger item = %#v, want completed with one retry", repo.ledgerItems[0])
+	}
 }
 
 func TestExecutorDoesNotRetryBusinessError(t *testing.T) {
@@ -341,6 +347,7 @@ type fakeRepository struct {
 	runStatus            string
 	cancelAfterFirstStep bool
 	reusableSteps        map[string]model.AgentStep
+	ledgerItems          []model.TaskLedgerItem
 }
 
 func (repo *fakeRepository) CreateStep(step *model.AgentStep) error {
@@ -440,6 +447,42 @@ func (repo *fakeRepository) CountStepAttemptsByKey(runID uint, stepKey string) (
 		}
 	}
 	return count, nil
+}
+
+func (repo *fakeRepository) FindTaskLedgerItem(runID uint, taskKey string) (model.TaskLedgerItem, bool, error) {
+	for _, item := range repo.ledgerItems {
+		if item.AgentRunID == runID && item.TaskKey == taskKey {
+			return item, true, nil
+		}
+	}
+	return model.TaskLedgerItem{}, false, nil
+}
+
+func (repo *fakeRepository) CreateTaskLedgerItem(item *model.TaskLedgerItem) error {
+	item.ID = uint(len(repo.ledgerItems) + 1)
+	repo.ledgerItems = append(repo.ledgerItems, *item)
+	return nil
+}
+
+func (repo *fakeRepository) UpdateTaskLedgerItem(itemID uint, attrs map[string]interface{}) error {
+	for index := range repo.ledgerItems {
+		if repo.ledgerItems[index].ID != itemID {
+			continue
+		}
+		if status, ok := attrs["status"].(string); ok {
+			repo.ledgerItems[index].Status = status
+		}
+		if outputRefsJSON, ok := attrs["output_refs_json"].(string); ok {
+			repo.ledgerItems[index].OutputRefsJSON = outputRefsJSON
+		}
+		if retryCount, ok := attrs["retry_count"].(int); ok {
+			repo.ledgerItems[index].RetryCount = retryCount
+		}
+		if errorMessage, ok := attrs["error_message"].(string); ok {
+			repo.ledgerItems[index].ErrorMessage = errorMessage
+		}
+	}
+	return nil
 }
 
 func reusableKey(runID uint, stepKey string, inputHash string) string {

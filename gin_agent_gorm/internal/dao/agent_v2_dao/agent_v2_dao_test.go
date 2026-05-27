@@ -47,6 +47,7 @@ type memoryDAOContract interface {
 
 type ledgerDAOContract interface {
 	CreateTaskLedgerItem(item *model.TaskLedgerItem) error
+	FindTaskLedgerItem(runID uint, taskKey string) (model.TaskLedgerItem, bool, error)
 	UpdateTaskLedgerItem(itemID uint, attrs map[string]interface{}) error
 	ListTaskLedgerItems(runID uint) ([]model.TaskLedgerItem, error)
 }

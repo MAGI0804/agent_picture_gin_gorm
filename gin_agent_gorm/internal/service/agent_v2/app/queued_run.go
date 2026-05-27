@@ -110,7 +110,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 
 	registry := tools.NewRegistry()
 	imageAdapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
-	if err := registry.Register(tools.Tool{
+	if err := registry.Register(tools.InstrumentTool(tools.Tool{
 		Name:          runtimeImageModelName(imageConfig.Config),
 		Kind:          tools.KindImageGeneration,
 		Provider:      imageConfig.Config.Provider,
@@ -122,7 +122,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 			CostPolicy:      "real_provider",
 		},
 		ImageGenerationProvider: imageAdapter,
-	}); err != nil {
+	}, svc.dao)); err != nil {
 		return workflow.Workflow{}, err
 	}
 
@@ -130,7 +130,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 	if textModelConfigID > 0 {
 		if textConfig, err := svc.resolveRuntimeModelConfig(userID, "text", textModelConfigID); err == nil {
 			textAdapter := tools.NewLegacyProviderAdapter(textConfig.Config)
-			_ = registry.Register(tools.Tool{
+			_ = registry.Register(tools.InstrumentTool(tools.Tool{
 				Name:          runtimeTextModelName(textConfig.Config),
 				Kind:          tools.KindText,
 				Provider:      textConfig.Config.Provider,
@@ -141,7 +141,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 					CostPolicy:     "real_provider",
 				},
 				TextProvider: textAdapter,
-			})
+			}, svc.dao))
 		}
 	}
 
@@ -150,7 +150,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 	if visionConfigID > 0 {
 		if visionConfig, err := svc.resolveRuntimeModelConfig(userID, "text", visionConfigID); err == nil {
 			visionModelConfigID = visionConfig.GlobalID
-			_ = registry.Register(tools.Tool{
+			_ = registry.Register(tools.InstrumentTool(tools.Tool{
 				Name:          runtimeTextModelName(visionConfig.Config),
 				Kind:          tools.KindVision,
 				Provider:      visionConfig.Config.Provider,
@@ -161,11 +161,11 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 					CostPolicy:         "real_provider",
 				},
 				VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
-			})
+			}, svc.dao))
 		}
 	} else if visionConfig, err := svc.resolveVisionRuntimeModelConfig(userID); err == nil {
 		visionModelConfigID = visionConfig.GlobalID
-		_ = registry.Register(tools.Tool{
+		_ = registry.Register(tools.InstrumentTool(tools.Tool{
 			Name:          runtimeTextModelName(visionConfig.Config),
 			Kind:          tools.KindVision,
 			Provider:      visionConfig.Config.Provider,
@@ -176,7 +176,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 				CostPolicy:         "real_provider",
 			},
 			VisionProvider: tools.NewGoogleVisionProvider(visionConfig.Config),
-		})
+		}, svc.dao))
 	}
 
 	return workflow.ImageGenerationWorkflow(workflow.ImageGenerationWorkflowOptions{

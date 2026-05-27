@@ -226,6 +226,7 @@ func (agent *ImageGenerationAgent) Run(ctx context.Context, state domain.RunStat
 		UserID:         state.UserID,
 		ConversationID: state.ConversationID,
 		RunID:          state.RunID,
+		StepID:         state.CurrentStepID,
 		TaskType:       state.TaskType,
 		Intent:         state.Intent,
 		Prompt:         prompt,

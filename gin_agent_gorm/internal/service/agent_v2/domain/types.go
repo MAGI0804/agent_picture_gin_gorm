@@ -25,6 +25,7 @@ const (
 // RunState 运行状态，包含一次 Agent 运行的完整上下文
 type RunState struct {
 	RunID           uint                `json:"run_id"`
+	CurrentStepID   uint                `json:"-"`
 	UserID          uint                `json:"user_id"`
 	ConversationID  uint                `json:"conversation_id"`
 	TaskType        string              `json:"task_type"`
