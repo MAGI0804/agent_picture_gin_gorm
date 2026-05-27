@@ -1833,6 +1833,13 @@ p {
   min-width: 0;
 }
 
+.v2-header > .v2-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .v2-composer {
   display: grid;
   gap: 14px;

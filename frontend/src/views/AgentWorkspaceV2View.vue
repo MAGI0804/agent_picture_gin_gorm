@@ -35,7 +35,10 @@
           <strong>{{ activeTitle }}</strong>
           <span>{{ runStatusText }}</span>
         </div>
-        <button type="button" :disabled="!activeRunId" @click="refreshRun">刷新 Timeline</button>
+        <div class="v2-header-actions">
+          <button type="button" :disabled="!activeRunId" @click="refreshRun">刷新 Timeline</button>
+          <button type="button" :disabled="!canCancelRun" @click="cancelActiveRun">取消</button>
+        </div>
       </header>
 
       <section class="v2-composer">
@@ -304,6 +307,7 @@ const memories = ref<ContextMemory[]>([])
 const memoryNamespace = ref('')
 const memoryLoading = ref(false)
 const promotingMemoryId = ref(0)
+const runPollTimer = ref<ReturnType<typeof window.setInterval> | null>(null)
 
 interface QualityScores {
   overall_score?: number
@@ -315,6 +319,10 @@ interface QualityScores {
 
 const activeRunId = computed(() => activeRun.value?.id || 0)
 const canRun = computed(() => Boolean(prompt.value.trim() && activeConversationId.value && !running.value))
+const canCancelRun = computed(() => {
+  const status = activeRun.value?.status || ''
+  return ['created', 'queued', 'running', 'waiting_user'].includes(status)
+})
 const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
 const reviewStep = computed(() => {
@@ -332,9 +340,12 @@ const runStatusText = computed(() => {
   const status = activeRun.value?.status || 'ready'
   const labels: Record<string, string> = {
     ready: '就绪',
+    created: '已创建',
+    queued: '排队中',
     running: '运行中',
     completed: '已完成',
-    failed: '失败'
+    failed: '失败',
+    cancelled: '已取消'
   }
   return labels[status] || status
 })
@@ -344,6 +355,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clearRunPolling()
   revokeAllPreviewURLs()
 })
 
@@ -388,7 +400,7 @@ async function runAgent() {
   errorMessage.value = ''
   steps.value = []
   try {
-    const data = await apiFetch<AgentV2RunResponse>(`/api/v2/conversations/${activeConversationId.value}/runs`, {
+    const data = await apiFetch<AgentV2RunResponse>(`/api/v2/conversations/${activeConversationId.value}/runs/async`, {
       method: 'POST',
       body: JSON.stringify({
         content: prompt.value.trim(),
@@ -400,6 +412,9 @@ async function runAgent() {
       })
     })
     await applyRunResponse(data)
+    if (data.agent_run?.id && ['created', 'queued', 'running'].includes(data.agent_run.status)) {
+      startRunPolling(data.agent_run.id)
+    }
     prompt.value = ''
     await loadConversations()
   } catch (error) {
@@ -426,7 +441,26 @@ async function refreshRun() {
   const data = await apiFetch<{ agent_run: AgentRun; steps: AgentStep[] }>(`/api/v2/runs/${activeRunId.value}`)
   activeRun.value = data.agent_run
   steps.value = data.steps || []
-  await loadArtifacts()
+  if (isTerminalRunStatus(data.agent_run.status)) {
+    clearRunPolling()
+    await loadArtifacts()
+    await loadMemories()
+  }
+}
+
+async function cancelActiveRun() {
+  if (!activeRunId.value || !canCancelRun.value) return
+  errorMessage.value = ''
+  try {
+    const data = await apiFetch<{ agent_run: AgentRun; cancelled: boolean }>(`/api/v2/runs/${activeRunId.value}/cancel`, {
+      method: 'POST'
+    })
+    activeRun.value = data.agent_run
+    clearRunPolling()
+    await refreshRun()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '取消失败'
+  }
 }
 
 async function loadArtifacts() {
@@ -573,6 +607,32 @@ function revokeAllPreviewURLs() {
 
 function previewUrlFor(artifact: Artifact) {
   return previewURLs.value[artifact.id] || ''
+}
+
+function startRunPolling(runID: number) {
+  clearRunPolling()
+  runPollTimer.value = window.setInterval(async () => {
+    if (activeRunId.value !== runID) {
+      clearRunPolling()
+      return
+    }
+    try {
+      await refreshRun()
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '刷新运行状态失败'
+      clearRunPolling()
+    }
+  }, 2000)
+}
+
+function clearRunPolling() {
+  if (!runPollTimer.value) return
+  window.clearInterval(runPollTimer.value)
+  runPollTimer.value = null
+}
+
+function isTerminalRunStatus(status: string) {
+  return ['completed', 'failed', 'cancelled'].includes(status)
 }
 
 function parseQualityScores(raw?: string): QualityScores | null {
