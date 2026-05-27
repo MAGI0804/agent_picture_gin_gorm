@@ -58,6 +58,7 @@ type MemorySearchRequest struct {
 	ConversationID uint   `json:"conversation_id" form:"conversation_id"`
 	Namespace      string `json:"namespace" form:"namespace"`
 	Scope          string `json:"scope" form:"scope"`
+	Kind           string `json:"kind" form:"kind"`
 	Limit          int    `json:"limit" form:"limit"`
 	MarkUsed       bool   `json:"mark_used" form:"mark_used"`
 }
@@ -65,6 +66,13 @@ type MemorySearchRequest struct {
 // PromoteMemoryRequest confirms a draft memory proposal.
 type PromoteMemoryRequest struct {
 	Confidence float64 `json:"confidence" form:"confidence"`
+}
+
+// UpdateMemoryRequest edits or disables one memory.
+type UpdateMemoryRequest struct {
+	Content    string   `json:"content" form:"content"`
+	Confidence *float64 `json:"confidence" form:"confidence"`
+	Disabled   bool     `json:"disabled" form:"disabled"`
 }
 
 // SelectArtifactRequest 是选择候选产物请求。
@@ -608,8 +616,20 @@ func (svc *Service) SearchMemories(userID uint, request MemorySearchRequest) ([]
 		ConversationID: request.ConversationID,
 		Namespace:      request.Namespace,
 		Scope:          request.Scope,
+		Kind:           request.Kind,
 		Limit:          limit,
 		MarkUsed:       request.MarkUsed,
+	})
+}
+
+// UpdateMemory edits or disables a V2 memory owned by the user.
+func (svc *Service) UpdateMemory(userID uint, memoryID uint, request UpdateMemoryRequest) (model.ContextMemory, error) {
+	return svc.memories.Update(memorysvc.UpdateMemoryInput{
+		UserID:     userID,
+		MemoryID:   memoryID,
+		Content:    request.Content,
+		Confidence: request.Confidence,
+		Disabled:   request.Disabled,
 	})
 }
 

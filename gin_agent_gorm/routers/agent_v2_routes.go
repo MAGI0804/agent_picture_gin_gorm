@@ -23,6 +23,7 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 		group.GET("/memories", ctrl.SearchMemories)
 		group.POST("/memories/search", ctrl.SearchMemories)
 		group.POST("/memories/:id/promote", ctrl.PromoteMemoryProposal)
+		group.PATCH("/memories/:id", ctrl.UpdateMemory)
 		group.DELETE("/memories/:id", ctrl.DeleteMemory)
 		group.GET("/artifacts/:id/versions", ctrl.ListArtifactVersions)
 		group.GET("/artifacts/:id/preview", ctrl.PreviewArtifact)

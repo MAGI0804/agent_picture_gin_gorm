@@ -100,6 +100,9 @@ export interface ContextMemory {
   scope?: string
   content: string
   tags_json?: string
+  source_type?: string
+  source_id?: number
+  artifact_id?: number
   confidence?: number
   use_count?: number
   created_at: number

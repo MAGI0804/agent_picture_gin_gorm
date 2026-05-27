@@ -285,6 +285,14 @@
           <button type="button" :disabled="memoryLoading || !activeConversationId" @click="loadMemories">刷新</button>
         </header>
         <label>
+          Status
+          <select v-model="memoryStatusFilter">
+            <option value="">all</option>
+            <option value="proposal">proposal</option>
+            <option value="stable">stable</option>
+          </select>
+        </label>
+        <label>
           Namespace
           <select v-model="memoryNamespace" :disabled="memoryLoading" @change="loadMemories">
             <option value="">全部</option>
@@ -296,14 +304,17 @@
             <option value="reflection">reflection</option>
           </select>
         </label>
-        <ul v-if="memories.length" class="v2-memory-list">
-          <li v-for="memory in memories" :key="memory.id">
+        <ul v-if="displayedMemories.length" class="v2-memory-list">
+          <li v-for="memory in displayedMemories" :key="memory.id">
             <div>
               <strong>{{ memory.namespace || memory.kind }}</strong>
               <p>{{ memory.content }}</p>
               <small>
                 {{ formatConfidence(memory.confidence) }} · used {{ memory.use_count || 0 }}
                 <span v-if="isMemoryProposal(memory)" class="v2-memory-proposal-badge">候选</span>
+              </small>
+              <small v-if="memory.source_type || memory.artifact_id">
+                {{ memory.source_type || 'source' }} #{{ memory.source_id || memory.artifact_id }}
               </small>
             </div>
             <div class="v2-memory-actions">
@@ -315,6 +326,7 @@
               >
                 {{ promotingMemoryId === memory.id ? '确认中...' : '确认' }}
               </button>
+              <button type="button" @click="editMemory(memory)">编辑</button>
               <button type="button" @click="deleteMemory(memory.id)">删除</button>
             </div>
           </li>
@@ -368,6 +380,7 @@ const selectingArtifact = ref(false)
 const previewURLs = ref<Record<number, string>>({})
 const memories = ref<ContextMemory[]>([])
 const memoryNamespace = ref('')
+const memoryStatusFilter = ref('')
 const memoryLoading = ref(false)
 const promotingMemoryId = ref(0)
 const runPollTimer = ref<ReturnType<typeof window.setInterval> | null>(null)
@@ -412,6 +425,15 @@ const rankedArtifacts = computed(() => {
     if (rankDelta !== 0) return rankDelta
     return right.id - left.id
   })
+})
+const displayedMemories = computed(() => {
+  if (memoryStatusFilter.value === 'proposal') {
+    return memories.value.filter(memory => isMemoryProposal(memory))
+  }
+  if (memoryStatusFilter.value === 'stable') {
+    return memories.value.filter(memory => !isMemoryProposal(memory))
+  }
+  return memories.value
 })
 const recommendedArtifactId = computed(() => rankedArtifacts.value[0]?.id || 0)
 const reviewStep = computed(() => {
@@ -702,6 +724,22 @@ async function promoteMemory(id: number) {
     errorMessage.value = error instanceof Error ? error.message : '记忆确认失败'
   } finally {
     promotingMemoryId.value = 0
+  }
+}
+
+async function editMemory(memory: ContextMemory) {
+  const nextContent = window.prompt('Memory', memory.content)
+  if (nextContent === null) return
+  const content = nextContent.trim()
+  if (!content || content === memory.content) return
+  try {
+    await apiFetch<{ memory: ContextMemory }>(`/api/v2/memories/${memory.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content })
+    })
+    await loadMemories()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '璁板繂缂栬緫澶辫触'
   }
 }
 

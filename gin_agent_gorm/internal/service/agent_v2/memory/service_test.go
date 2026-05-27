@@ -61,6 +61,38 @@ func TestServiceWriteCreatesMemoryAndAuditEvent(t *testing.T) {
 	}
 }
 
+func TestServiceWriteMergesSemanticallyDuplicateStableMemory(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{BaseModel: model.BaseModel{ID: 41}, UserID: 7, Namespace: NamespaceVisualStyle, Kind: NamespaceVisualStyle, Content: "prefer warm low saturation colors", Confidence: 0.80},
+		},
+	}
+	svc := NewService(repo)
+
+	memory, err := svc.Write(WriteRequest{
+		UserID:     7,
+		Namespace:  NamespaceVisualStyle,
+		Kind:       NamespaceVisualStyle,
+		Content:    "Prefer warm, low-saturation colour palette",
+		Confidence: 0.75,
+	})
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if memory.ID != 41 {
+		t.Fatalf("memory ID = %d, want existing duplicate 41", memory.ID)
+	}
+	if repo.memory.ID != 0 {
+		t.Fatalf("created memory %#v, want semantic merge", repo.memory)
+	}
+	if repo.updatedMemoryID != 41 {
+		t.Fatalf("updated memory ID = %d, want 41", repo.updatedMemoryID)
+	}
+	if repo.events[len(repo.events)-1].EventType != EventTypeMerged {
+		t.Fatalf("last event = %#v, want merged", repo.events[len(repo.events)-1])
+	}
+}
+
 func TestServiceProposesVisualStyleMemoryFromSelectedFeedback(t *testing.T) {
 	repo := &fakeRepository{}
 	svc := NewService(repo)
@@ -284,6 +316,77 @@ func TestServicePromotesMemoryProposal(t *testing.T) {
 	}
 }
 
+func TestServicePromoteProposalDemotesConflictingStableMemory(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{
+				BaseModel:  model.BaseModel{ID: 55},
+				UserID:     7,
+				Namespace:  NamespaceVisualStyle,
+				Scope:      "brand:default",
+				Kind:       KindMemoryProposal,
+				Content:    "prefer warm colors",
+				Confidence: 0.65,
+			},
+			{
+				BaseModel:  model.BaseModel{ID: 56},
+				UserID:     7,
+				Namespace:  NamespaceVisualStyle,
+				Scope:      "brand:default",
+				Kind:       NamespaceVisualStyle,
+				Content:    "prefer cool colors",
+				Confidence: 0.90,
+			},
+		},
+	}
+	svc := NewService(repo)
+
+	memory, promoted, err := svc.PromoteProposal(PromoteProposalInput{
+		UserID:     7,
+		MemoryID:   55,
+		Confidence: 0.86,
+	})
+	if err != nil {
+		t.Fatalf("PromoteProposal() error = %v", err)
+	}
+	if !promoted || memory.ID != 55 {
+		t.Fatalf("promoted=%v memory=%#v, want proposal 55 promoted", promoted, memory)
+	}
+	if repo.memories[1].Confidence >= 0.90 {
+		t.Fatalf("conflicting memory confidence = %.2f, want demoted", repo.memories[1].Confidence)
+	}
+	if !repo.hasEvent(EventTypeConflictDemoted) {
+		t.Fatalf("events = %#v, want conflict demoted event", repo.events)
+	}
+}
+
+func TestServicePromptContextRanksAndResolvesConflicts(t *testing.T) {
+	repo := &fakeRepository{
+		memories: []model.ContextMemory{
+			{BaseModel: model.BaseModel{ID: 1}, UserID: 7, Namespace: NamespaceVisualStyle, Kind: NamespaceVisualStyle, Scope: "brand", Content: "prefer cool colors", Confidence: 0.80, UseCount: 2, LastUsedAt: 20},
+			{BaseModel: model.BaseModel{ID: 2}, UserID: 7, Namespace: NamespaceVisualStyle, Kind: NamespaceVisualStyle, Scope: "brand", Content: "prefer warm colors", Confidence: 0.92, UseCount: 1, LastUsedAt: 10},
+			{BaseModel: model.BaseModel{ID: 3}, UserID: 7, Namespace: NamespaceUserProfile, Kind: NamespaceUserProfile, Content: "user sells coffee", Confidence: 0.70, UseCount: 8, LastUsedAt: 30},
+		},
+	}
+	svc := NewService(repo)
+
+	items, err := svc.PromptContext(PromptContextRequest{UserID: 7, Limit: 3})
+	if err != nil {
+		t.Fatalf("PromptContext() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want conflict-resolved 2", len(items))
+	}
+	if items[0].ID != 2 {
+		t.Fatalf("first memory ID = %d, want highest ranked visual memory 2", items[0].ID)
+	}
+	for _, item := range items {
+		if item.ID == 1 {
+			t.Fatalf("conflicting lower-ranked memory was included: %#v", items)
+		}
+	}
+}
+
 func TestServiceSkipsPromptContextDraftsAndLowConfidence(t *testing.T) {
 	repo := &fakeRepository{
 		memories: []model.ContextMemory{
@@ -330,6 +433,7 @@ type fakeRepository struct {
 	updatedAttrs    map[string]interface{}
 	usedIDs         []uint
 	event           model.MemoryEvent
+	events          []model.MemoryEvent
 	deletedUserID   uint
 	deletedMemoryID uint
 }
@@ -407,5 +511,15 @@ func (repo *fakeRepository) SoftDeleteMemory(userID uint, memoryID uint) error {
 
 func (repo *fakeRepository) CreateMemoryEvent(event *model.MemoryEvent) error {
 	repo.event = *event
+	repo.events = append(repo.events, *event)
 	return nil
+}
+
+func (repo *fakeRepository) hasEvent(eventType string) bool {
+	for _, event := range repo.events {
+		if event.EventType == eventType {
+			return true
+		}
+	}
+	return false
 }

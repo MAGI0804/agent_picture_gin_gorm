@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"unicode"
 
 	"gin-biz-web-api/internal/dao/agent_v2_dao"
 	"gin-biz-web-api/model"
@@ -20,11 +22,12 @@ const (
 
 	KindMemoryProposal = "memory_proposal"
 
-	EventTypeCreated  = "created"
-	EventTypeDeleted  = "deleted"
-	EventTypeUsed     = "used"
-	EventTypeMerged   = "merged"
-	EventTypePromoted = "promoted"
+	EventTypeCreated         = "created"
+	EventTypeDeleted         = "deleted"
+	EventTypeUsed            = "used"
+	EventTypeMerged          = "merged"
+	EventTypePromoted        = "promoted"
+	EventTypeConflictDemoted = "conflict_demoted"
 
 	SourceTypeArtifactFeedback = "artifact_feedback"
 	SourceTypeReview           = "review"
@@ -56,6 +59,7 @@ type SearchRequest struct {
 	ConversationID uint
 	Namespace      string
 	Scope          string
+	Kind           string
 	Limit          int
 	MarkUsed       bool
 }
@@ -89,6 +93,15 @@ type PromoteProposalInput struct {
 	UserID     uint
 	MemoryID   uint
 	Confidence float64
+}
+
+// UpdateMemoryInput edits safe user-controlled memory fields.
+type UpdateMemoryInput struct {
+	UserID     uint
+	MemoryID   uint
+	Content    string
+	Confidence *float64
+	Disabled   bool
 }
 
 // ArtifactFeedbackProposalInput describes user feedback that can become a draft memory.
@@ -132,6 +145,7 @@ func (svc *Service) Search(request SearchRequest) ([]model.ContextMemory, error)
 		ConversationID: request.ConversationID,
 		Namespace:      request.Namespace,
 		Scope:          request.Scope,
+		Kind:           request.Kind,
 		Limit:          request.Limit,
 	}
 	memories, err := svc.repo.ListMemories(filter)
@@ -164,7 +178,7 @@ func (svc *Service) PromptContext(request PromptContextRequest) ([]model.Context
 	}
 
 	namespaces := []string{NamespaceVisualStyle, NamespaceUserProfile}
-	result := make([]model.ContextMemory, 0, limit)
+	candidates := make([]model.ContextMemory, 0, limit*len(namespaces))
 	for _, namespace := range namespaces {
 		memories, err := svc.repo.ListMemories(agent_v2_dao.MemoryFilter{
 			UserID:         request.UserID,
@@ -174,19 +188,19 @@ func (svc *Service) PromptContext(request PromptContextRequest) ([]model.Context
 			Limit:          limit,
 		})
 		if err != nil {
-			return result, err
+			return candidates, err
 		}
 		for _, memory := range memories {
-			if len(result) >= limit {
-				return result, nil
-			}
 			if memory.Kind == KindMemoryProposal || memory.Confidence < minConfidence {
 				continue
 			}
-			result = append(result, memory)
-			if err := svc.repo.UpdateMemoryUsage(memory.ID); err != nil {
-				return result, err
-			}
+			candidates = append(candidates, memory)
+		}
+	}
+	result := rankAndResolveMemories(candidates, limit)
+	for _, memory := range result {
+		if err := svc.repo.UpdateMemoryUsage(memory.ID); err != nil {
+			return result, err
 		}
 	}
 	return result, nil
@@ -206,6 +220,15 @@ func (svc *Service) Write(request WriteRequest) (model.ContextMemory, error) {
 	kind := request.Kind
 	if kind == "" {
 		kind = request.Namespace
+	}
+	if kind != KindMemoryProposal {
+		duplicate, ok, err := svc.findSemanticDuplicate(request, kind)
+		if err != nil {
+			return model.ContextMemory{}, err
+		}
+		if ok {
+			return svc.mergeStableMemory(duplicate, request)
+		}
 	}
 
 	memory := model.ContextMemory{
@@ -359,7 +382,14 @@ func (svc *Service) PromoteProposal(input PromoteProposalInput) (model.ContextMe
 	if confidence > 1 {
 		confidence = 1
 	}
-	return svc.promoteMemory(memory, confidence, "memory proposal promoted to stable memory", 0)
+	promoted, changed, err := svc.promoteMemory(memory, confidence, "memory proposal promoted to stable memory", 0)
+	if err != nil || !changed {
+		return promoted, changed, err
+	}
+	if err := svc.demoteConflictingStableMemories(promoted, 0); err != nil {
+		return promoted, changed, err
+	}
+	return promoted, changed, nil
 }
 
 func (svc *Service) promoteMemory(
@@ -397,6 +427,58 @@ func (svc *Service) promoteMemory(
 		return memory, true, err
 	}
 	return memory, true, nil
+}
+
+// Update edits one memory or disables it while preserving auditability.
+func (svc *Service) Update(input UpdateMemoryInput) (model.ContextMemory, error) {
+	if input.UserID == 0 {
+		return model.ContextMemory{}, errors.New("update memory user_id is required")
+	}
+	if input.MemoryID == 0 {
+		return model.ContextMemory{}, errors.New("update memory id is required")
+	}
+	memory, err := svc.repo.FindMemory(input.UserID, input.MemoryID)
+	if err != nil {
+		return model.ContextMemory{}, err
+	}
+	if input.Disabled {
+		if err := svc.Delete(input.UserID, input.MemoryID); err != nil {
+			return model.ContextMemory{}, err
+		}
+		return memory, nil
+	}
+	attrs := map[string]interface{}{}
+	if strings.TrimSpace(input.Content) != "" {
+		attrs["content"] = strings.TrimSpace(input.Content)
+	}
+	if input.Confidence != nil {
+		attrs["confidence"] = clampConfidence(*input.Confidence)
+	}
+	if len(attrs) == 0 {
+		return memory, nil
+	}
+	if err := svc.repo.UpdateMemory(input.MemoryID, attrs); err != nil {
+		return model.ContextMemory{}, err
+	}
+	before := memory.Content
+	if content, ok := attrs["content"].(string); ok {
+		memory.Content = content
+	}
+	if confidence, ok := attrs["confidence"].(float64); ok {
+		memory.Confidence = confidence
+	}
+	if err := svc.repo.CreateMemoryEvent(&model.MemoryEvent{
+		MemoryID:       memory.ID,
+		UserID:         memory.UserID,
+		ConversationID: memory.ConversationID,
+		EventType:      EventTypeMerged,
+		BeforeJSON:     before,
+		AfterJSON:      memory.Content,
+		Reason:         "memory manually updated",
+	}); err != nil {
+		return memory, err
+	}
+	return memory, nil
 }
 
 // Delete 软删除一条记忆并记录审计事件。
@@ -472,9 +554,111 @@ func (svc *Service) writeOrMergeProposal(request WriteRequest) (model.ContextMem
 	memory.ArtifactID = request.ArtifactID
 	if confidence >= autoPromoteProposalConfidence {
 		promotedMemory, _, err := svc.promoteMemory(memory, confidence, "memory proposal auto-promoted after repeated matching feedback", request.AgentRunID)
+		if err == nil {
+			err = svc.demoteConflictingStableMemories(promotedMemory, request.AgentRunID)
+		}
 		return promotedMemory, err
 	}
 	return memory, nil
+}
+
+func (svc *Service) findSemanticDuplicate(request WriteRequest, kind string) (model.ContextMemory, bool, error) {
+	existing, err := svc.repo.ListMemories(agent_v2_dao.MemoryFilter{
+		UserID:         request.UserID,
+		ConversationID: request.ConversationID,
+		Namespace:      request.Namespace,
+		Kind:           kind,
+		Limit:          50,
+	})
+	if err != nil {
+		return model.ContextMemory{}, false, err
+	}
+	for _, memory := range existing {
+		if memory.Kind == KindMemoryProposal {
+			continue
+		}
+		if memory.Scope != "" && request.Scope != "" && memory.Scope != request.Scope {
+			continue
+		}
+		if semanticSimilarity(memory.Content, request.Content) >= 0.55 {
+			return memory, true, nil
+		}
+	}
+	return model.ContextMemory{}, false, nil
+}
+
+func (svc *Service) mergeStableMemory(memory model.ContextMemory, request WriteRequest) (model.ContextMemory, error) {
+	mergedContent := mergeContent(memory.Content, request.Content)
+	confidence := maxFloat(memory.Confidence, request.Confidence)
+	attrs := map[string]interface{}{
+		"content":     mergedContent,
+		"confidence":  confidence,
+		"tags_json":   request.TagsJSON,
+		"source_type": request.SourceType,
+		"source_id":   request.SourceID,
+		"artifact_id": request.ArtifactID,
+	}
+	if err := svc.repo.UpdateMemory(memory.ID, attrs); err != nil {
+		return model.ContextMemory{}, err
+	}
+	if err := svc.repo.CreateMemoryEvent(&model.MemoryEvent{
+		MemoryID:       memory.ID,
+		UserID:         memory.UserID,
+		ConversationID: memory.ConversationID,
+		AgentRunID:     request.AgentRunID,
+		EventType:      EventTypeMerged,
+		SourceType:     request.SourceType,
+		SourceID:       request.SourceID,
+		BeforeJSON:     memory.Content,
+		AfterJSON:      mergedContent,
+		Reason:         "merged semantically duplicate stable memory",
+	}); err != nil {
+		return memory, err
+	}
+	memory.Content = mergedContent
+	memory.Confidence = confidence
+	return memory, nil
+}
+
+func (svc *Service) demoteConflictingStableMemories(memory model.ContextMemory, agentRunID uint) error {
+	if strings.TrimSpace(memory.Scope) == "" {
+		return nil
+	}
+	existing, err := svc.repo.ListMemories(agent_v2_dao.MemoryFilter{
+		UserID:         memory.UserID,
+		ConversationID: memory.ConversationID,
+		Namespace:      memory.Namespace,
+		Scope:          memory.Scope,
+		Limit:          50,
+	})
+	if err != nil {
+		return err
+	}
+	for _, candidate := range existing {
+		if candidate.ID == memory.ID || candidate.Kind == KindMemoryProposal {
+			continue
+		}
+		if !memoryConflicts(memory.Content, candidate.Content) {
+			continue
+		}
+		nextConfidence := minFloat(candidate.Confidence, maxFloat(0.10, memory.Confidence-0.25))
+		if err := svc.repo.UpdateMemory(candidate.ID, map[string]interface{}{"confidence": nextConfidence}); err != nil {
+			return err
+		}
+		if err := svc.repo.CreateMemoryEvent(&model.MemoryEvent{
+			MemoryID:       candidate.ID,
+			UserID:         candidate.UserID,
+			ConversationID: candidate.ConversationID,
+			AgentRunID:     agentRunID,
+			EventType:      EventTypeConflictDemoted,
+			BeforeJSON:     candidate.Content,
+			AfterJSON:      candidate.Content,
+			Reason:         fmt.Sprintf("demoted because memory %d conflicts in scope %s", memory.ID, memory.Scope),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func shouldProposeFeedbackMemory(feedbackType string, rating int, comment string) bool {
@@ -541,6 +725,133 @@ func mergeContent(existing string, next string) string {
 		return existing
 	}
 	return existing + "\n" + next
+}
+
+func rankAndResolveMemories(memories []model.ContextMemory, limit int) []model.ContextMemory {
+	ranked := append([]model.ContextMemory{}, memories...)
+	sort.SliceStable(ranked, func(i, j int) bool {
+		left := memoryRankScore(ranked[i])
+		right := memoryRankScore(ranked[j])
+		if left == right {
+			return ranked[i].ID > ranked[j].ID
+		}
+		return left > right
+	})
+	result := make([]model.ContextMemory, 0, limit)
+	for _, memory := range ranked {
+		conflicts := false
+		for _, selected := range result {
+			if selected.Namespace == memory.Namespace &&
+				selected.Scope != "" &&
+				selected.Scope == memory.Scope &&
+				memoryConflicts(selected.Content, memory.Content) {
+				conflicts = true
+				break
+			}
+		}
+		if conflicts {
+			continue
+		}
+		result = append(result, memory)
+		if limit > 0 && len(result) >= limit {
+			return result
+		}
+	}
+	return result
+}
+
+func memoryRankScore(memory model.ContextMemory) float64 {
+	score := memory.Confidence * 100
+	score += minFloat(float64(memory.UseCount), 10) * 2
+	if memory.LastUsedAt > 0 {
+		score += minFloat(float64(memory.LastUsedAt)/1000000000, 5)
+	}
+	switch memory.Namespace {
+	case NamespaceVisualStyle:
+		score += 8
+	case NamespaceUserProfile:
+		score += 4
+	case NamespaceReflection:
+		score -= 8
+	}
+	return score
+}
+
+func semanticSimilarity(left string, right string) float64 {
+	leftTokens := tokenSet(left)
+	rightTokens := tokenSet(right)
+	if len(leftTokens) == 0 || len(rightTokens) == 0 {
+		return 0
+	}
+	intersection := 0
+	for token := range leftTokens {
+		if rightTokens[token] {
+			intersection++
+		}
+	}
+	union := len(leftTokens) + len(rightTokens) - intersection
+	if union == 0 {
+		return 0
+	}
+	return float64(intersection) / float64(union)
+}
+
+func tokenSet(value string) map[string]bool {
+	aliases := map[string]string{
+		"colour":         "color",
+		"colors":         "color",
+		"colours":        "color",
+		"palette":        "color",
+		"palettes":       "color",
+		"saturation":     "saturated",
+		"low-saturation": "saturated",
+	}
+	fields := strings.FieldsFunc(strings.ToLower(value), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
+	result := map[string]bool{}
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if len([]rune(field)) < 2 {
+			continue
+		}
+		if alias, ok := aliases[field]; ok {
+			field = alias
+		}
+		result[field] = true
+	}
+	return result
+}
+
+func memoryConflicts(left string, right string) bool {
+	left = strings.ToLower(left)
+	right = strings.ToLower(right)
+	opposites := [][2]string{
+		{"warm", "cool"},
+		{"bright", "dark"},
+		{"minimal", "complex"},
+		{"saturated", "desaturated"},
+		{"text", "no text"},
+	}
+	for _, pair := range opposites {
+		if strings.Contains(left, pair[0]) && strings.Contains(right, pair[1]) {
+			return true
+		}
+		if strings.Contains(left, pair[1]) && strings.Contains(right, pair[0]) {
+			return true
+		}
+	}
+	return false
+}
+
+func clampConfidence(confidence float64) float64 {
+	if confidence < 0 {
+		return 0
+	}
+	if confidence > 1 {
+		return 1
+	}
+	return confidence
 }
 
 func maxFloat(left float64, right float64) float64 {

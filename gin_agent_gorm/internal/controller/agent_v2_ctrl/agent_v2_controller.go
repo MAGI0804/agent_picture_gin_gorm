@@ -162,6 +162,26 @@ func (ctrl *AgentV2Controller) DeleteMemory(c *gin.Context) {
 	responses.New(c).ToResponse(gin.H{"deleted": true})
 }
 
+// UpdateMemory edits or disables one V2 memory.
+func (ctrl *AgentV2Controller) UpdateMemory(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	memoryID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.UpdateMemoryRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	memory, err := app.NewService().UpdateMemory(userID, memoryID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"memory": memory})
+}
+
 // PromoteMemoryProposal 将一条候选记忆确认为稳定记忆。
 func (ctrl *AgentV2Controller) PromoteMemoryProposal(c *gin.Context) {
 	userID := auth.CurrentUserID(c)
