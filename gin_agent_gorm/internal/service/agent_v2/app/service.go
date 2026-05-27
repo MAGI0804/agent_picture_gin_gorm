@@ -33,6 +33,7 @@ type Service struct {
 	executor  *runtime.Executor
 	artifacts *artifactsvc.Service
 	memories  *memorysvc.Service
+	runQueue  RunQueue
 }
 
 // CreateRunRequest 是创建 Agent Run 的请求体。
@@ -74,12 +75,21 @@ type ArtifactFeedbackRequest struct {
 
 // NewService 创建应用服务，并手动装配 DAO 与运行时执行器。
 func NewService() *Service {
+	return newService(NewDefaultRunQueue())
+}
+
+func NewServiceWithRunQueue(runQueue RunQueue) *Service {
+	return newService(runQueue)
+}
+
+func newService(runQueue RunQueue) *Service {
 	dao := agent_v2_dao.NewAgentV2DAO()
 	return &Service{
 		dao:       dao,
 		executor:  runtime.NewExecutor(dao),
 		artifacts: artifactsvc.NewService(dao),
 		memories:  memorysvc.NewService(dao),
+		runQueue:  runQueue,
 	}
 }
 
@@ -269,13 +279,34 @@ func (svc *Service) createRun(
 		ModelName:           runtimeImageModelName(imageConfig.Config),
 	})
 	if async {
-		if err := svc.dao.UpdateRun(run.ID, map[string]interface{}{"status": domain.RunStatusQueued}); err != nil {
+		if svc.runQueue == nil {
+			err := errors.New("agent v2 run queue is not configured")
+			_ = svc.dao.UpdateRun(run.ID, map[string]interface{}{
+				"status":        domain.RunStatusFailed,
+				"error_message": err.Error(),
+			})
+			return nil, err
+		}
+		state.RunID = run.ID
+		if err := svc.dao.UpdateRun(run.ID, map[string]interface{}{
+			"status":     domain.RunStatusQueued,
+			"state_json": mustJSON(state),
+		}); err != nil {
 			return nil, err
 		}
 		run.Status = domain.RunStatusQueued
-		go func() {
-			_, _, _ = svc.executePreparedRun(context.Background(), userID, conversation, run, state, flow)
-		}()
+		run.StateJSON = mustJSON(state)
+		if err := svc.runQueue.EnqueueAgentRun(ctx, AgentRunQueuePayload{
+			RunID:          run.ID,
+			UserID:         userID,
+			ConversationID: conversation.ID,
+		}); err != nil {
+			_ = svc.dao.UpdateRun(run.ID, map[string]interface{}{
+				"status":        domain.RunStatusFailed,
+				"error_message": err.Error(),
+			})
+			return nil, err
+		}
 		return map[string]interface{}{
 			"conversation": conversation,
 			"user_message": message,

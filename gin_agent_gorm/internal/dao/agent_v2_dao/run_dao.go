@@ -1,6 +1,8 @@
 package agent_v2_dao
 
 import (
+	"time"
+
 	"gin-biz-web-api/model"
 	"gin-biz-web-api/pkg/database"
 )
@@ -44,6 +46,24 @@ func (dao *AgentV2DAO) FindRunStatus(runID uint) (string, error) {
 	var run model.AgentRun
 	err := database.DB.Select("status").Where("id = ?", runID).First(&run).Error
 	return run.Status, err
+}
+
+// ClaimRunStatus atomically moves a run from one status to another.
+func (dao *AgentV2DAO) ClaimRunStatus(userID uint, runID uint, fromStatus string, toStatus string) (bool, error) {
+	attrs := map[string]interface{}{
+		"status": toStatus,
+	}
+	if toStatus == "running" {
+		attrs["started_at"] = int(time.Now().Unix())
+		attrs["error_message"] = ""
+	}
+	result := database.DB.Model(&model.AgentRun{}).
+		Where("user_id = ? AND id = ? AND status = ?", userID, runID, fromStatus).
+		Updates(attrs)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected == 1, nil
 }
 
 // FindRunByIdempotencyKey returns an existing run for a user-supplied idempotency key.

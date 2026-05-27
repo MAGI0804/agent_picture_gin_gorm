@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gin-biz-web-api/global"
+	agentv2app "gin-biz-web-api/internal/service/agent_v2/app"
 	"gin-biz-web-api/job"
 	"gin-biz-web-api/pkg/config"
 	"gin-biz-web-api/pkg/console"
@@ -12,6 +13,7 @@ import (
 	"gin-biz-web-api/pkg/logger"
 
 	"github.com/hibiken/asynq"
+	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -56,6 +58,19 @@ func setupQueueJob() {
 // addQueueJob 添加异步队列任务
 func addQueueJob(mux *asynq.ServeMux) {
 	mux.HandleFunc(job.TypeFoo, job.HandFooTask)
+	mux.HandleFunc(job.TypeAgentV2Run, handleAgentV2RunTask)
+}
+
+func handleAgentV2RunTask(ctx context.Context, task *asynq.Task) error {
+	payload, err := job.ParseAgentV2RunPayload(task)
+	if err != nil {
+		return errors.Errorf("parse agent v2 run payload failed: %v: %v", err, asynq.SkipRetry)
+	}
+	return agentv2app.NewService().ExecuteQueuedRun(ctx, agentv2app.AgentRunQueuePayload{
+		RunID:          payload.RunID,
+		UserID:         payload.UserID,
+		ConversationID: payload.ConversationID,
+	})
 }
 
 // jobLoggingMiddleware 异步任务执行日志中间件

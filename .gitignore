@@ -1,5 +1,6 @@
 ﻿gin_agent_gorm/etc/**
 gin_agent_gorm/storage/logs/**
+gin_agent_gorm/public/artifacts/user-*/
 node_modules/
 dist/
 .vscode/
