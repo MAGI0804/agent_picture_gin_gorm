@@ -41,53 +41,20 @@
         </div>
       </header>
 
-      <section class="v2-composer">
-        <div class="v2-model-row">
-          <label>
-            文本模型
-            <select v-model.number="textModelConfigId">
-              <option :value="0">自动选择</option>
-              <option v-for="item in modelSelection?.text_models || []" :key="item.id" :value="item.id">
-                {{ item.model_name }}
-              </option>
-            </select>
-          </label>
-          <label>
-            图片模型
-            <select v-model.number="imageModelConfigId">
-              <option :value="0">自动选择</option>
-              <option v-for="item in modelSelection?.image_models || []" :key="item.id" :value="item.id">
-                {{ item.model_name }}
-              </option>
-            </select>
-          </label>
-          <label>
-            候选数
-            <select v-model.number="candidateCount">
-              <option :value="1">1 张</option>
-              <option :value="2">2 张</option>
-              <option :value="3">3 张</option>
-            </select>
-          </label>
-        </div>
-
-        <label>
-          图片需求
-          <textarea
-            v-model="prompt"
-            placeholder="输入图片需求，V2 会抽取需求、生成 prompt、调用图片模型并写入 artifact version。"
-            @keydown.enter.ctrl.prevent="runAgent"
-          />
-        </label>
-
-        <div class="v2-actions">
-          <button class="primary" type="button" :disabled="!canRun" @click="runAgent">
-            {{ running ? '运行中...' : '运行 V2 Agent' }}
-          </button>
-          <button type="button" :disabled="running" @click="prompt = ''">清空</button>
-          <span v-if="errorMessage">{{ errorMessage }}</span>
-        </div>
-      </section>
+      <WorkspaceComposer
+        v-model:text-model-config-id="textModelConfigId"
+        v-model:image-model-config-id="imageModelConfigId"
+        v-model:candidate-count="candidateCount"
+        v-model:prompt="prompt"
+        :model-selection="modelSelection"
+        :running="running"
+        :can-run="canRun"
+        :can-retry="canRetryFailedRun"
+        :error-message="errorMessage"
+        @run="runAgent"
+        @clear="prompt = ''"
+        @retry="retryFailedRun"
+      />
 
       <section v-if="activeRun?.status === 'waiting_user'" class="v2-clarification">
         <header>
@@ -110,26 +77,12 @@
         </div>
       </section>
 
-      <section class="v2-timeline">
-        <header>
-          <strong>Timeline</strong>
-          <small>{{ steps.length }} steps · {{ toolInvocations.length }} tools</small>
-        </header>
-        <ol>
-          <li v-for="step in steps" :key="step.id" :class="step.status">
-            <div>
-              <strong>{{ step.name }}</strong>
-              <span>{{ step.status }}</span>
-              <small v-if="step.attempt">attempt {{ step.attempt }}</small>
-              <small v-if="step.duration_ms">{{ step.duration_ms }}ms</small>
-              <small v-if="providerLabelForStep(step)">{{ providerLabelForStep(step) }}</small>
-            </div>
-            <p>{{ step.output || step.error_message || summarizeStep(step) }}</p>
-            <p v-if="errorLabelForStep(step)" class="muted">{{ errorLabelForStep(step) }}</p>
-          </li>
-        </ol>
-        <p v-if="!steps.length" class="muted">暂无运行记录。</p>
-      </section>
+      <TimelinePanel
+        :active-run="activeRun"
+        :steps="steps"
+        :task-ledger-items="taskLedgerItems"
+        :tool-invocations="toolInvocations"
+      />
     </section>
 
     <aside class="v2-artifacts">
@@ -151,32 +104,28 @@
         </button>
       </section>
 
-      <section class="v2-artifact-grid">
-        <button
-          v-for="(artifact, index) in rankedArtifacts"
-          :key="artifact.id"
-          type="button"
-          class="v2-artifact-item"
-          :class="{
-            active: artifact.id === selectedArtifact?.id,
-            chosen: Boolean(artifact.selected_at),
-            recommended: isRecommendedArtifact(artifact)
-          }"
-          @click="selectArtifact(artifact)"
-        >
-          <img v-if="isPreviewableArtifact(artifact) && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
-          <span v-else>{{ artifact.kind }}</span>
-          <strong>{{ artifact.name }}</strong>
-          <small>{{ artifact.mime_type }}</small>
-          <div class="v2-artifact-metrics">
-            <small>#{{ index + 1 }}</small>
+      <ArtifactBoard
+        :artifacts="rankedArtifacts"
+        :selected-artifact-id="selectedArtifact?.id || 0"
+        :recommended-artifact-id="recommendedArtifactId"
+        :compare-ids="compareArtifactIds"
+        :preview-u-r-ls="previewURLs"
+        @select="selectArtifact"
+        @toggle-compare="toggleCompareArtifact"
+      />
+
+      <section v-if="compareArtifacts.length" class="v2-preview">
+        <div class="v2-preview-head">
+          <strong>候选对比</strong>
+          <button type="button" @click="compareArtifactIds = []">清空</button>
+        </div>
+        <div class="v2-compare-grid">
+          <article v-for="artifact in compareArtifacts" :key="artifact.id">
+            <img v-if="isPreviewableArtifact(artifact) && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
+            <strong>{{ artifact.name }}</strong>
             <small>Rank {{ formatRankScore(artifact.rank_score) }}</small>
-          </div>
-          <div class="v2-artifact-badges">
-            <small v-if="isRecommendedArtifact(artifact)" class="v2-recommended-badge">推荐</small>
-            <small v-if="artifact.selected_at" class="v2-selected-badge">已选中</small>
-          </div>
-        </button>
+          </article>
+        </div>
       </section>
 
       <section v-if="selectedArtifact" class="v2-preview">
@@ -197,104 +146,33 @@
         <p v-else>{{ selectedArtifact.mime_type }}</p>
       </section>
 
-      <section v-if="selectedArtifact" class="v2-versions">
-        <header>
-          <strong>版本</strong>
-          <small>{{ versions.length }}</small>
-        </header>
-        <button
-          v-for="version in versions"
-          :key="version.id"
-          type="button"
-          :class="{ active: version.id === selectedVersionId }"
-          @click="selectedVersionId = version.id"
-        >
-          <span>v{{ version.version_no }} · {{ version.operation }}</span>
-          <small>{{ version.model_provider }}/{{ version.model_name }}</small>
-          <small v-if="version.parent_version_id">parent v{{ version.parent_version_id }}</small>
-          <small v-if="version.quality_scores">score {{ formatScore(parseQualityScores(version.quality_scores)?.overall_score) }}</small>
-        </button>
-      </section>
+      <VersionStrip
+        :artifact-id="selectedArtifact?.id || 0"
+        :versions="versions"
+        v-model:selected-version-id="selectedVersionId"
+      />
 
-      <section v-if="selectedArtifact" class="v2-edit-panel">
-        <label>
-          编辑 Prompt
-          <textarea
-            v-model="editPrompt"
-            placeholder="描述要基于当前版本继续修改的内容。"
-            @keydown.enter.ctrl.prevent="editSelectedArtifact"
-          />
-        </label>
-        <button type="button" :disabled="!canEditArtifact" @click="editSelectedArtifact">
-          {{ editingArtifact ? '编辑中...' : '继续编辑' }}
-        </button>
-      </section>
+      <EditPanel
+        v-model:edit-prompt="editPrompt"
+        v-model:render-title="renderTitle"
+        v-model:render-subtitle="renderSubtitle"
+        v-model:render-brand="renderBrand"
+        :artifact="selectedArtifact"
+        :editing="editingArtifact"
+        :can-edit="canEditArtifact"
+        :rendering="renderingTextLayer"
+        :can-render="canRenderTextLayer"
+        @edit="editSelectedArtifact"
+        @render="renderTextLayer"
+      />
 
-      <section v-if="selectedArtifact?.kind === 'image'" class="v2-edit-panel">
-        <label>
-          标题
-          <input v-model="renderTitle" type="text" placeholder="中文标题由渲染层排版" />
-        </label>
-        <label>
-          副标题
-          <input v-model="renderSubtitle" type="text" placeholder="可选副标题" />
-        </label>
-        <label>
-          品牌
-          <input v-model="renderBrand" type="text" placeholder="可选品牌文案" />
-        </label>
-        <button type="button" :disabled="!canRenderTextLayer" @click="renderTextLayer">
-          {{ renderingTextLayer ? '渲染中...' : '生成文字分层' }}
-        </button>
-      </section>
-
-      <section v-if="selectedArtifact" class="v2-review-panel">
-        <header>
-          <strong>Review / Eval</strong>
-          <small>{{ reviewStatusText }}</small>
-        </header>
-        <div v-if="selectedQualityScores" class="v2-score-block">
-          <div>
-            <span>质量分</span>
-            <strong>{{ formatScore(selectedQualityScores.overall_score) }}</strong>
-          </div>
-          <div>
-            <span>Requirement</span>
-            <strong>{{ formatScore(selectedQualityScores.requirement_match) }}</strong>
-          </div>
-          <div>
-            <span>Composition</span>
-            <strong>{{ formatScore(selectedQualityScores.composition_score) }}</strong>
-          </div>
-          <div>
-            <span>Text</span>
-            <strong>{{ formatScore(selectedQualityScores.text_readability) }}</strong>
-          </div>
-          <div>
-            <span>Layout</span>
-            <strong>{{ formatScore(selectedQualityScores.layout_score) }}</strong>
-          </div>
-          <div>
-            <span>Refine</span>
-            <strong>{{ selectedQualityScores.should_refine ? '需要' : '不需要' }}</strong>
-          </div>
-          <div>
-            <span>排序分</span>
-            <strong>{{ formatRankScore(selectedQualityScores.rank_score ?? selectedArtifact.rank_score) }}</strong>
-          </div>
-        </div>
-        <ul v-if="selectedQualityScores?.issues?.length" class="v2-issue-list">
-          <li v-for="issue in selectedQualityScores.issues" :key="issue">{{ issue }}</li>
-        </ul>
-        <p v-else-if="!selectedQualityScores" class="muted">暂无版本质量分。</p>
-        <p v-if="selectedQualityScores?.extracted_text" class="muted">
-          OCR: {{ selectedQualityScores.extracted_text }}
-        </p>
-        <details v-if="reviewStep" class="v2-step-detail">
-          <summary>vision_review_agent</summary>
-          <p>{{ summarizeStep(reviewStep) }}</p>
-        </details>
-      </section>
+      <ReviewPanel
+        :artifact-id="selectedArtifact?.id || 0"
+        :quality-scores="selectedQualityScores"
+        :review-status-text="reviewStatusText"
+        :review-summary="reviewStep ? summarizeStep(reviewStep) : ''"
+        :artifact-rank-score="selectedArtifact?.rank_score"
+      />
 
       <section v-if="selectedArtifact" class="v2-feedback">
         <label>
@@ -361,63 +239,20 @@
         </ul>
       </section>
 
-      <section class="v2-memory-panel">
-        <header>
-          <div>
-            <strong>Memory</strong>
-            <span>{{ memories.length }} 条</span>
-          </div>
-          <button type="button" :disabled="memoryLoading || !activeConversationId" @click="loadMemories">刷新</button>
-        </header>
-        <label>
-          Status
-          <select v-model="memoryStatusFilter">
-            <option value="">all</option>
-            <option value="proposal">proposal</option>
-            <option value="stable">stable</option>
-          </select>
-        </label>
-        <label>
-          Namespace
-          <select v-model="memoryNamespace" :disabled="memoryLoading" @change="loadMemories">
-            <option value="">全部</option>
-            <option value="conversation">conversation</option>
-            <option value="user_profile">user_profile</option>
-            <option value="visual_style">visual_style</option>
-            <option value="artifact_lineage">artifact_lineage</option>
-            <option value="tool_experience">tool_experience</option>
-            <option value="reflection">reflection</option>
-          </select>
-        </label>
-        <ul v-if="displayedMemories.length" class="v2-memory-list">
-          <li v-for="memory in displayedMemories" :key="memory.id">
-            <div>
-              <strong>{{ memory.namespace || memory.kind }}</strong>
-              <p>{{ memory.content }}</p>
-              <small>
-                {{ formatConfidence(memory.confidence) }} · used {{ memory.use_count || 0 }}
-                <span v-if="isMemoryProposal(memory)" class="v2-memory-proposal-badge">候选</span>
-              </small>
-              <small v-if="memory.source_type || memory.artifact_id">
-                {{ memory.source_type || 'source' }} #{{ memory.source_id || memory.artifact_id }}
-              </small>
-            </div>
-            <div class="v2-memory-actions">
-              <button
-                v-if="isMemoryProposal(memory)"
-                type="button"
-                :disabled="promotingMemoryId === memory.id"
-                @click="promoteMemory(memory.id)"
-              >
-                {{ promotingMemoryId === memory.id ? '确认中...' : '确认' }}
-              </button>
-              <button type="button" @click="editMemory(memory)">编辑</button>
-              <button type="button" @click="deleteMemory(memory.id)">删除</button>
-            </div>
-          </li>
-        </ul>
-        <p v-else class="muted">暂无记忆。</p>
-      </section>
+      <MemoryPanel
+        :conversation-id="activeConversationId || 0"
+        :memories="memories"
+        :displayed-memories="displayedMemories"
+        :namespace="memoryNamespace"
+        v-model:status-filter="memoryStatusFilter"
+        :loading="memoryLoading"
+        :promoting-memory-id="promotingMemoryId"
+        @refresh="loadMemories"
+        @namespace-change="setMemoryNamespace"
+        @promote="promoteMemory"
+        @edit="editMemory"
+        @delete="deleteMemory"
+      />
     </aside>
   </main>
 </template>
@@ -425,18 +260,41 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { apiFetch, downloadV2Artifact, fetchV2ArtifactPreviewURL } from '../api'
+import { apiFetch } from '../api'
+import { cancelAgentRun, createAgentRun, fetchAgentRun, fetchModelSelection, resumeAgentRun } from '../api/agentV2'
+import {
+  downloadV2Artifact,
+  editArtifactVersion,
+  fetchV2ArtifactPreviewURL,
+  listArtifactVersions,
+  listConversationArtifacts,
+  recordArtifactFeedback,
+  renderArtifactText,
+  selectArtifactVersion,
+  uploadConversationArtifact
+} from '../api/artifacts'
+import { deleteMemoryById, listMemories, promoteMemoryProposal, updateMemoryContent } from '../api/memories'
+import ArtifactBoard from '../components/workspace/ArtifactBoard.vue'
+import EditPanel from '../components/workspace/EditPanel.vue'
+import MemoryPanel from '../components/workspace/MemoryPanel.vue'
+import ReviewPanel from '../components/workspace/ReviewPanel.vue'
+import TimelinePanel from '../components/workspace/TimelinePanel.vue'
+import VersionStrip from '../components/workspace/VersionStrip.vue'
+import WorkspaceComposer from '../components/workspace/WorkspaceComposer.vue'
+import { useAgentRun } from '../composables/useAgentRun'
+import { useArtifacts } from '../composables/useArtifacts'
+import { useMemories } from '../composables/useMemories'
+import { useRunEvents } from '../composables/useRunEvents'
 import type {
-  AgentRun,
   AgentStep,
   AgentPromptVersion,
   AgentV2RunResponse,
   Artifact,
-  ArtifactVersion,
   Conversation,
   ContextMemory,
   EvolutionSummaryItem,
   ModelSelection,
+  QualityScores,
   TaskLedgerItem,
   ToolInvocation
 } from '../types'
@@ -451,14 +309,22 @@ const candidateCount = ref(1)
 const prompt = ref('')
 const running = ref(false)
 const errorMessage = ref('')
-const activeRun = ref<AgentRun | null>(null)
+const { activeRun, activeRunId, runStatusText, canCancelRun, isTerminalRunStatus } = useAgentRun()
 const steps = ref<AgentStep[]>([])
 const taskLedgerItems = ref<TaskLedgerItem[]>([])
 const toolInvocations = ref<ToolInvocation[]>([])
-const artifacts = ref<Artifact[]>([])
-const selectedArtifact = ref<Artifact | null>(null)
-const versions = ref<ArtifactVersion[]>([])
-const selectedVersionId = ref(0)
+const {
+  artifacts,
+  selectedArtifact,
+  versions,
+  selectedVersionId,
+  previewURLs,
+  rankedArtifacts,
+  recommendedArtifactId,
+  selectedVersion,
+  cleanupPreviewURLs,
+  revokeAllPreviewURLs
+} = useArtifacts()
 const uploadFile = ref<File | null>(null)
 const uploadingArtifact = ref(false)
 const editPrompt = ref('')
@@ -472,33 +338,23 @@ const rating = ref(0)
 const feedbackComment = ref('')
 const feedbackSending = ref(false)
 const selectingArtifact = ref(false)
-const previewURLs = ref<Record<number, string>>({})
-const memories = ref<ContextMemory[]>([])
-const memoryNamespace = ref('')
-const memoryStatusFilter = ref('')
-const memoryLoading = ref(false)
-const promotingMemoryId = ref(0)
+const {
+  memories,
+  memoryNamespace,
+  memoryStatusFilter,
+  memoryLoading,
+  promotingMemoryId,
+  displayedMemories
+} = useMemories()
 const evolutionAgent = ref('prompt_agent')
 const evolutionSummary = ref<EvolutionSummaryItem[]>([])
 const promptVersions = ref<AgentPromptVersion[]>([])
 const evolutionLoading = ref(false)
-const runPollTimer = ref<ReturnType<typeof window.setInterval> | null>(null)
 const clarificationAnswer = ref('')
 const resumingRun = ref(false)
-
-interface QualityScores {
-  overall_score?: number
-  requirement_match?: number
-  composition_score?: number
-  text_readability?: number
-  layout_score?: number
-  rank_score?: number
-  issues?: string[]
-  should_refine?: boolean
-  reviewer?: string
-  reviewed_at?: number
-  extracted_text?: string
-}
+const lastRunState = ref<Record<string, unknown> | null>(null)
+const compareArtifactIds = ref<number[]>([])
+const { startRunPolling, clearRunPolling } = useRunEvents(refreshRun)
 
 interface StepResultSnapshot {
   output?: {
@@ -506,12 +362,8 @@ interface StepResultSnapshot {
   }
 }
 
-const activeRunId = computed(() => activeRun.value?.id || 0)
 const canRun = computed(() => Boolean(prompt.value.trim() && activeConversationId.value && !running.value))
-const canCancelRun = computed(() => {
-  const status = activeRun.value?.status || ''
-  return ['created', 'queued', 'running', 'waiting_user'].includes(status)
-})
+const canRetryFailedRun = computed(() => activeRun.value?.status === 'failed' && Boolean(retryPromptText().trim()) && Boolean(activeConversationId.value))
 const clarificationQuestions = computed(() => extractClarificationQuestions())
 const canResumeRun = computed(() => {
   return activeRun.value?.status === 'waiting_user' && Boolean(clarificationAnswer.value.trim()) && !resumingRun.value
@@ -519,25 +371,8 @@ const canResumeRun = computed(() => {
 const canUploadArtifact = computed(() => Boolean(activeConversationId.value && uploadFile.value && !uploadingArtifact.value))
 const canEditArtifact = computed(() => Boolean(selectedArtifact.value && selectedVersionId.value && editPrompt.value.trim() && !editingArtifact.value))
 const canRenderTextLayer = computed(() => Boolean(selectedArtifact.value?.kind === 'image' && selectedVersionId.value && renderTitle.value.trim() && !renderingTextLayer.value))
-const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
-const rankedArtifacts = computed(() => {
-  return [...artifacts.value].sort((left, right) => {
-    const rankDelta = (right.rank_score || 0) - (left.rank_score || 0)
-    if (rankDelta !== 0) return rankDelta
-    return right.id - left.id
-  })
-})
-const displayedMemories = computed(() => {
-  if (memoryStatusFilter.value === 'proposal') {
-    return memories.value.filter(memory => isMemoryProposal(memory))
-  }
-  if (memoryStatusFilter.value === 'stable') {
-    return memories.value.filter(memory => !isMemoryProposal(memory))
-  }
-  return memories.value
-})
-const recommendedArtifactId = computed(() => rankedArtifacts.value[0]?.id || 0)
+const compareArtifacts = computed(() => rankedArtifacts.value.filter(artifact => compareArtifactIds.value.includes(artifact.id)))
 const reviewStep = computed(() => {
   return [...steps.value].reverse().find(step => step.step_key === 'vision_review_agent' || step.name === 'vision_review_agent') || null
 })
@@ -549,23 +384,9 @@ const reviewStatusText = computed(() => {
 const activeTitle = computed(() => {
   return conversations.value.find(item => item.id === activeConversationId.value)?.title || 'V2 图片工作台'
 })
-const runStatusText = computed(() => {
-  const status = activeRun.value?.status || 'ready'
-  const labels: Record<string, string> = {
-    ready: '就绪',
-    created: '已创建',
-    queued: '排队中',
-    running: '运行中',
-    waiting_user: '等待补充信息',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消'
-  }
-  return labels[status] || status
-})
-
 onMounted(async () => {
   await Promise.all([loadModelSelection(), loadConversations()])
+  await restoreLastRun()
 })
 
 onBeforeUnmount(() => {
@@ -574,7 +395,7 @@ onBeforeUnmount(() => {
 })
 
 async function loadModelSelection() {
-  modelSelection.value = await apiFetch<ModelSelection>('/api/settings/model-selection')
+  modelSelection.value = await fetchModelSelection()
   textModelConfigId.value = modelSelection.value.text_model_config_id || 0
   imageModelConfigId.value = modelSelection.value.image_model_config_id || 0
 }
@@ -582,7 +403,11 @@ async function loadModelSelection() {
 async function loadConversations() {
   const data = await apiFetch<{ conversations: Conversation[] }>('/api/conversations')
   conversations.value = data.conversations || []
-  if (!activeConversationId.value && conversations.value.length) {
+  const savedConversationId = Number(localStorage.getItem('agent_v2_conversation_id') || 0)
+  const savedConversation = conversations.value.find(item => item.id === savedConversationId)
+  if (!activeConversationId.value && savedConversation) {
+    await openConversation(savedConversation.id)
+  } else if (!activeConversationId.value && conversations.value.length) {
     await openConversation(conversations.value[0].id)
   }
   if (!activeConversationId.value) {
@@ -601,6 +426,7 @@ async function createConversation() {
 
 async function openConversation(id: number) {
   activeConversationId.value = id
+  localStorage.setItem('agent_v2_conversation_id', String(id))
   activeRun.value = null
   steps.value = []
   taskLedgerItems.value = []
@@ -608,6 +434,7 @@ async function openConversation(id: number) {
   selectedArtifact.value = null
   versions.value = []
   clarificationAnswer.value = ''
+  compareArtifactIds.value = []
   await Promise.all([loadArtifacts(), loadMemories(), loadEvolution()])
 }
 
@@ -620,20 +447,18 @@ async function runAgent() {
   toolInvocations.value = []
   clarificationAnswer.value = ''
   try {
-    const data = await apiFetch<AgentV2RunResponse>(`/api/v2/conversations/${activeConversationId.value}/runs/async`, {
-      method: 'POST',
-      body: JSON.stringify({
-        content: prompt.value.trim(),
-        task_type: 'image_generation',
-        text_model_config_id: textModelConfigId.value,
-        image_model_config_id: imageModelConfigId.value,
-        candidate_count: candidateCount.value,
-        idempotency_key: `${activeConversationId.value}-${Date.now()}`
-      })
+    const data = await createAgentRun({
+      conversationId: activeConversationId.value,
+      content: prompt.value.trim(),
+      textModelConfigId: textModelConfigId.value,
+      imageModelConfigId: imageModelConfigId.value,
+      candidateCount: candidateCount.value
     })
     await applyRunResponse(data)
     if (data.agent_run?.id && ['created', 'queued', 'running'].includes(data.agent_run.status)) {
-      startRunPolling(data.agent_run.id)
+      startRunPolling(data.agent_run.id, () => activeRunId.value, message => {
+        errorMessage.value = message
+      })
     }
     prompt.value = ''
     await loadConversations()
@@ -644,8 +469,27 @@ async function runAgent() {
   }
 }
 
+async function retryFailedRun() {
+  const content = retryPromptText().trim()
+  if (!activeConversationId.value || !content || running.value) return
+  prompt.value = content
+  await runAgent()
+}
+
+function retryPromptText() {
+  const statePrompt = lastRunState.value?.user_request
+  if (typeof statePrompt === 'string' && statePrompt.trim()) return statePrompt
+  if (selectedVersion.value?.prompt?.trim()) return selectedVersion.value.prompt
+  if (activeRun.value?.optimized_prompt?.trim()) return activeRun.value.optimized_prompt
+  return prompt.value
+}
+
 async function applyRunResponse(data: AgentV2RunResponse) {
   activeRun.value = data.agent_run
+  lastRunState.value = data.state || null
+  if (data.agent_run?.id) {
+    localStorage.setItem('agent_v2_run_id', String(data.agent_run.id))
+  }
   steps.value = data.steps || []
   taskLedgerItems.value = data.task_ledger_items || []
   toolInvocations.value = data.tool_invocations || []
@@ -658,10 +502,28 @@ async function applyRunResponse(data: AgentV2RunResponse) {
   await loadMemories()
 }
 
+async function restoreLastRun() {
+  const savedRunId = Number(localStorage.getItem('agent_v2_run_id') || 0)
+  if (!savedRunId || activeRun.value) return
+  try {
+    const data = await fetchAgentRun(savedRunId)
+    if (activeConversationId.value && data.agent_run.conversation_id !== activeConversationId.value) return
+    await applyRunResponse(data)
+    if (['created', 'queued', 'running'].includes(data.agent_run.status)) {
+      startRunPolling(data.agent_run.id, () => activeRunId.value, message => {
+        errorMessage.value = message
+      })
+    }
+  } catch {
+    localStorage.removeItem('agent_v2_run_id')
+  }
+}
+
 async function refreshRun() {
   if (!activeRunId.value) return
-  const data = await apiFetch<AgentV2RunResponse>(`/api/v2/runs/${activeRunId.value}`)
+  const data = await fetchAgentRun(activeRunId.value)
   activeRun.value = data.agent_run
+  lastRunState.value = data.state || null
   steps.value = data.steps || []
   taskLedgerItems.value = data.task_ledger_items || []
   toolInvocations.value = data.tool_invocations || []
@@ -679,16 +541,13 @@ async function resumeActiveRun() {
   resumingRun.value = true
   errorMessage.value = ''
   try {
-    const data = await apiFetch<AgentV2RunResponse>(`/api/v2/runs/${activeRunId.value}/resume`, {
-      method: 'POST',
-      body: JSON.stringify({
-        content: clarificationAnswer.value.trim()
-      })
-    })
+    const data = await resumeAgentRun(activeRunId.value, clarificationAnswer.value.trim())
     clarificationAnswer.value = ''
     await applyRunResponse(data)
     if (data.agent_run?.id && ['created', 'queued', 'running'].includes(data.agent_run.status)) {
-      startRunPolling(data.agent_run.id)
+      startRunPolling(data.agent_run.id, () => activeRunId.value, message => {
+        errorMessage.value = message
+      })
     }
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '继续运行失败'
@@ -701,9 +560,7 @@ async function cancelActiveRun() {
   if (!activeRunId.value || !canCancelRun.value) return
   errorMessage.value = ''
   try {
-    const data = await apiFetch<{ agent_run: AgentRun; cancelled: boolean }>(`/api/v2/runs/${activeRunId.value}/cancel`, {
-      method: 'POST'
-    })
+    const data = await cancelAgentRun(activeRunId.value)
     activeRun.value = data.agent_run
     clearRunPolling()
     await refreshRun()
@@ -714,7 +571,7 @@ async function cancelActiveRun() {
 
 async function loadArtifacts() {
   if (!activeConversationId.value) return
-  const data = await apiFetch<{ artifacts: Artifact[] }>(`/api/v2/conversations/${activeConversationId.value}/artifacts`)
+  const data = await listConversationArtifacts(activeConversationId.value)
   artifacts.value = data.artifacts || []
   cleanupPreviewURLs(artifacts.value)
   await preloadArtifactPreviews(artifacts.value)
@@ -733,7 +590,7 @@ async function selectArtifact(artifact: Artifact) {
   selectedArtifact.value = artifact
   selectedVersionId.value = 0
   feedbackComment.value = ''
-  const data = await apiFetch<{ versions: ArtifactVersion[] }>(`/api/v2/artifacts/${artifact.id}/versions`)
+  const data = await listArtifactVersions(artifact.id)
   versions.value = data.versions || []
   selectedVersionId.value = versions.value[versions.value.length - 1]?.id || 0
 }
@@ -753,12 +610,7 @@ async function uploadArtifact() {
   uploadingArtifact.value = true
   errorMessage.value = ''
   try {
-    const form = new FormData()
-    form.set('file', uploadFile.value)
-    const data = await apiFetch<{ artifact: Artifact; version: ArtifactVersion }>(
-      `/api/v2/conversations/${activeConversationId.value}/artifacts/upload`,
-      { method: 'POST', body: form }
-    )
+    const data = await uploadConversationArtifact(activeConversationId.value, uploadFile.value)
     uploadFile.value = null
     await loadArtifacts()
     const current = artifacts.value.find(item => item.id === data.artifact.id) || data.artifact
@@ -777,14 +629,7 @@ async function editSelectedArtifact() {
   editingArtifact.value = true
   errorMessage.value = ''
   try {
-    await apiFetch<{ version: ArtifactVersion }>(`/api/v2/artifacts/${selectedArtifact.value.id}/edit`, {
-      method: 'POST',
-      body: JSON.stringify({
-        artifact_version_id: selectedVersionId.value,
-        prompt: promptText,
-        image_model_config_id: imageModelConfigId.value
-      })
-    })
+    await editArtifactVersion(selectedArtifact.value.id, selectedVersionId.value, promptText, imageModelConfigId.value)
     editPrompt.value = ''
     const artifactID = selectedArtifact.value.id
     await loadArtifacts()
@@ -806,15 +651,13 @@ async function renderTextLayer() {
   renderingTextLayer.value = true
   errorMessage.value = ''
   try {
-    const data = await apiFetch<{ artifact: Artifact; version: ArtifactVersion }>(`/api/v2/artifacts/${selectedArtifact.value.id}/render-text`, {
-      method: 'POST',
-      body: JSON.stringify({
-        artifact_version_id: selectedVersionId.value,
-        title,
-        subtitle: renderSubtitle.value.trim(),
-        brand: renderBrand.value.trim()
-      })
-    })
+    const data = await renderArtifactText(
+      selectedArtifact.value.id,
+      selectedVersionId.value,
+      title,
+      renderSubtitle.value.trim(),
+      renderBrand.value.trim()
+    )
     renderTitle.value = ''
     renderSubtitle.value = ''
     renderBrand.value = ''
@@ -833,12 +676,7 @@ async function markSelected() {
   selectingArtifact.value = true
   errorMessage.value = ''
   try {
-    await apiFetch<{ selected: boolean }>(`/api/v2/artifacts/${selectedArtifact.value.id}/select`, {
-      method: 'POST',
-      body: JSON.stringify({
-        artifact_version_id: selectedVersionId.value
-      })
-    })
+    await selectArtifactVersion(selectedArtifact.value.id, selectedVersionId.value)
     await loadArtifacts()
     const current = artifacts.value.find(item => item.id === selectedArtifact.value?.id)
     if (current) {
@@ -855,15 +693,13 @@ async function sendFeedback() {
   if (!selectedArtifact.value || feedbackSending.value) return
   feedbackSending.value = true
   try {
-    await apiFetch<{ recorded: boolean }>(`/api/v2/artifacts/${selectedArtifact.value.id}/feedback`, {
-      method: 'POST',
-      body: JSON.stringify({
-        artifact_version_id: selectedVersionId.value,
-        feedback_type: feedbackType.value,
-        rating: rating.value,
-        comment: feedbackComment.value.trim()
-      })
-    })
+    await recordArtifactFeedback(
+      selectedArtifact.value.id,
+      selectedVersionId.value,
+      feedbackType.value,
+      rating.value,
+      feedbackComment.value.trim()
+    )
     feedbackComment.value = ''
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '反馈提交失败'
@@ -876,14 +712,11 @@ async function loadMemories() {
   if (!activeConversationId.value) return
   memoryLoading.value = true
   try {
-    const params = new URLSearchParams({
-      conversation_id: String(activeConversationId.value),
-      limit: '20'
+    const data = await listMemories({
+      conversationId: activeConversationId.value,
+      namespace: memoryNamespace.value,
+      limit: 20
     })
-    if (memoryNamespace.value) {
-      params.set('namespace', memoryNamespace.value)
-    }
-    const data = await apiFetch<{ memories: ContextMemory[] }>(`/api/v2/memories?${params.toString()}`)
     memories.value = data.memories || []
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '记忆加载失败'
@@ -949,7 +782,7 @@ async function updatePromptVersionLifecycle(id: number, action: string) {
 }
 
 async function deleteMemory(id: number) {
-  await apiFetch<{ deleted: boolean }>(`/api/v2/memories/${id}`, { method: 'DELETE' })
+  await deleteMemoryById(id)
   memories.value = memories.value.filter(item => item.id !== id)
 }
 
@@ -958,10 +791,7 @@ async function promoteMemory(id: number) {
   promotingMemoryId.value = id
   errorMessage.value = ''
   try {
-    await apiFetch<{ memory: ContextMemory; promoted: boolean }>(`/api/v2/memories/${id}/promote`, {
-      method: 'POST',
-      body: JSON.stringify({ confidence: 0.85 })
-    })
+    await promoteMemoryProposal(id)
     await loadMemories()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '记忆确认失败'
@@ -976,14 +806,24 @@ async function editMemory(memory: ContextMemory) {
   const content = nextContent.trim()
   if (!content || content === memory.content) return
   try {
-    await apiFetch<{ memory: ContextMemory }>(`/api/v2/memories/${memory.id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ content })
-    })
+    await updateMemoryContent(memory.id, content)
     await loadMemories()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : '璁板繂缂栬緫澶辫触'
+    errorMessage.value = error instanceof Error ? error.message : '记忆编辑失败'
   }
+}
+
+async function setMemoryNamespace(value: string) {
+  memoryNamespace.value = value
+  await loadMemories()
+}
+
+function toggleCompareArtifact(artifactId: number) {
+  if (compareArtifactIds.value.includes(artifactId)) {
+    compareArtifactIds.value = compareArtifactIds.value.filter(id => id !== artifactId)
+    return
+  }
+  compareArtifactIds.value = [...compareArtifactIds.value, artifactId].slice(-3)
 }
 
 async function preloadArtifactPreviews(items: Artifact[]) {
@@ -998,53 +838,8 @@ async function preloadArtifactPreviews(items: Artifact[]) {
   }))
 }
 
-function cleanupPreviewURLs(items: Artifact[]) {
-  const keep = new Set(items.map(item => item.id))
-  const next = { ...previewURLs.value }
-  for (const [id, url] of Object.entries(previewURLs.value)) {
-    if (!keep.has(Number(id))) {
-      if (url) URL.revokeObjectURL(url)
-      delete next[Number(id)]
-    }
-  }
-  previewURLs.value = next
-}
-
-function revokeAllPreviewURLs() {
-  Object.values(previewURLs.value).forEach(url => {
-    if (url) URL.revokeObjectURL(url)
-  })
-  previewURLs.value = {}
-}
-
 function previewUrlFor(artifact: Artifact) {
   return previewURLs.value[artifact.id] || ''
-}
-
-function startRunPolling(runID: number) {
-  clearRunPolling()
-  runPollTimer.value = window.setInterval(async () => {
-    if (activeRunId.value !== runID) {
-      clearRunPolling()
-      return
-    }
-    try {
-      await refreshRun()
-    } catch (error) {
-      errorMessage.value = error instanceof Error ? error.message : '刷新运行状态失败'
-      clearRunPolling()
-    }
-  }, 2000)
-}
-
-function clearRunPolling() {
-  if (!runPollTimer.value) return
-  window.clearInterval(runPollTimer.value)
-  runPollTimer.value = null
-}
-
-function isTerminalRunStatus(status: string) {
-  return ['completed', 'failed', 'cancelled'].includes(status)
 }
 
 function extractClarificationQuestions() {
@@ -1084,32 +879,14 @@ function parseQualityScores(raw?: string): QualityScores | null {
   }
 }
 
-function formatScore(score?: number) {
-  if (typeof score !== 'number') return '-'
-  return `${Math.round(score * 100)}`
-}
-
 function formatRankScore(score?: number) {
   if (typeof score !== 'number') return '-'
   if (score >= 0 && score <= 1) return `${Math.round(score * 100)}`
   return score.toFixed(2)
 }
 
-function isRecommendedArtifact(artifact: Artifact) {
-  return artifact.id === recommendedArtifactId.value
-}
-
 function isPreviewableArtifact(artifact: Artifact) {
   return artifact.kind === 'image' || artifact.kind === 'svg'
-}
-
-function formatConfidence(confidence?: number) {
-  if (typeof confidence !== 'number' || confidence <= 0) return 'confidence -'
-  return `confidence ${Math.round(confidence * 100)}`
-}
-
-function isMemoryProposal(memory: ContextMemory) {
-  return memory.kind === 'memory_proposal'
 }
 
 function summarizeStep(step: AgentStep) {
@@ -1120,31 +897,6 @@ function summarizeStep(step: AgentStep) {
   } catch {
     return '已写入结构化输出'
   }
-}
-
-function toolForStep(step: AgentStep) {
-  return toolInvocations.value.find(tool => tool.agent_step_id === step.id) || null
-}
-
-function ledgerForStep(step: AgentStep) {
-  return taskLedgerItems.value.find(item => item.task_key === (step.step_key || step.name)) || null
-}
-
-function providerLabelForStep(step: AgentStep) {
-  const tool = toolForStep(step)
-  const provider = tool?.provider_name || step.provider_name
-  const model = tool?.model_name || step.model_name
-  if (!provider && !model) return ''
-  return [provider, model].filter(Boolean).join(' / ')
-}
-
-function errorLabelForStep(step: AgentStep) {
-  const tool = toolForStep(step)
-  const ledger = ledgerForStep(step)
-  const code = step.error_code || tool?.error_code
-  const message = step.error_message || tool?.error_message || ledger?.error_message
-  if (code && message) return `${code}: ${message}`
-  return code || message || ''
 }
 
 function formatTime(timestamp?: number) {

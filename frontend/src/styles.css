@@ -1974,6 +1974,15 @@ p {
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.v2-empty-state {
+  display: grid;
+  gap: 6px;
+  border: 1px dashed var(--line);
+  padding: 14px;
+  background: #ffffff;
 }
 
 .v2-artifacts {
@@ -2011,6 +2020,19 @@ p {
 
 .v2-artifact-item.recommended {
   box-shadow: inset 0 0 0 1px #111111;
+}
+
+.v2-artifact-item.comparing {
+  border-style: dashed;
+}
+
+.v2-compare-toggle {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 24px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .v2-artifact-metrics,
@@ -2083,6 +2105,30 @@ p {
 
 .v2-preview img {
   max-height: 310px;
+}
+
+.v2-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.v2-compare-grid article {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.v2-compare-grid img {
+  width: 100%;
+  max-height: 170px;
+  object-fit: contain;
+}
+
+.v2-compare-grid strong,
+.v2-memory-list p,
+.v2-artifact-item strong {
+  overflow-wrap: anywhere;
 }
 
 .v2-versions {

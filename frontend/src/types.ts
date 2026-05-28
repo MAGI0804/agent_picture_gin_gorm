@@ -241,6 +241,20 @@ export interface ToolInvocation {
   updated_at?: number
 }
 
+export interface QualityScores {
+  overall_score?: number
+  requirement_match?: number
+  composition_score?: number
+  text_readability?: number
+  layout_score?: number
+  rank_score?: number
+  issues?: string[]
+  should_refine?: boolean
+  reviewer?: string
+  reviewed_at?: number
+  extracted_text?: string
+}
+
 export interface ModelConfig {
   selected_text_model_config_id?: number
   selected_image_model_config_id?: number
