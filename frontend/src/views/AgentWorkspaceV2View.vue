@@ -1,21 +1,13 @@
 <template>
-  <main class="v2-workspace">
+  <main class="v2-workspace" :class="{ 'v2-workspace--with-artifacts': hasArtifactPanel }">
     <aside class="v2-sidebar">
       <header class="v2-brand">
         <img class="brand-logo" src="/logo.jpg" alt="平台 Logo" />
-        <strong>Agent V2</strong>
       </header>
 
-      <nav class="v2-nav">
-        <button class="active" type="button">V2 工作台</button>
-        <button type="button" @click="router.push('/chat')">旧版对话</button>
-        <button type="button" @click="router.push('/settings')">设置</button>
-      </nav>
-
-      <button class="primary v2-new-button" type="button" @click="createConversation">新建会话</button>
+      <button class="v2-new-button" type="button" aria-label="新建会话" @click="createConversation">+</button>
 
       <section class="v2-conversations">
-        <h2>会话</h2>
         <button
           v-for="item in conversations"
           :key="item.id"
@@ -23,86 +15,123 @@
           :class="{ active: item.id === activeConversationId }"
           @click="openConversation(item.id)"
         >
+          <span class="v2-chat-dot" aria-hidden="true"></span>
           <span>{{ item.title }}</span>
-          <small>{{ formatTime(item.updated_at) }}</small>
         </button>
       </section>
+
+      <footer class="v2-sidebar-footer">
+        <div v-if="userMenuOpen" class="v2-sidebar-menu">
+          <button type="button" @click="router.push('/settings')">
+            <svg class="v2-settings-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            设置
+          </button>
+          <button type="button">
+            <svg class="v2-logout-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+              <polyline points="16 17 21 12 16 7"></polyline>
+              <line x1="21" y1="12" x2="9" y2="12"></line>
+            </svg>
+            退出登录
+          </button>
+        </div>
+        <button class="v2-user-chip" type="button" @click="userMenuOpen = !userMenuOpen">
+          <span class="v2-user-avatar" aria-hidden="true"></span>
+          <strong>demo_user</strong>
+          <span aria-hidden="true">⌃</span>
+        </button>
+      </footer>
     </aside>
 
     <section class="v2-main">
       <header class="v2-header">
-        <div>
-          <strong>{{ activeTitle }}</strong>
-          <span>{{ runStatusText }}</span>
+        <div class="v2-header-brand">
+          <img class="brand-logo" src="/logo.jpg" alt="平台 Logo" />
+          <span class="v2-online-dot" aria-hidden="true"></span>
+          <div>
+            <strong>{{ activeTitle }}</strong>
+            <span>{{ runStatusText }}</span>
+          </div>
         </div>
         <div class="v2-header-actions">
-          <button type="button" :disabled="!activeRunId" @click="refreshRun">刷新 Timeline</button>
-          <button type="button" :disabled="!canCancelRun" @click="cancelActiveRun">取消</button>
+          <button class="v2-icon-button v2-tune-icon" type="button" :disabled="!activeRunId" aria-label="刷新时间线" @click="refreshRun"></button>
+          <button class="v2-icon-button v2-close-icon" type="button" :disabled="!canCancelRun" aria-label="取消运行" @click="cancelActiveRun"></button>
         </div>
       </header>
+
+      <div class="v2-main-scroll">
+        <section v-if="promptHistory.length" class="v2-prompt-history">
+          <header>
+            <strong>原提示词记录</strong>
+            <span>{{ promptHistory.length }} 条</span>
+          </header>
+          <ol>
+            <li v-for="item in promptHistory" :key="item.id">
+              <time>{{ formatHistoryTime(item.createdAt) }}</time>
+              <p>{{ item.content }}</p>
+            </li>
+          </ol>
+        </section>
+
+        <section v-if="activeRun?.status === 'waiting_user'" class="v2-clarification">
+          <header>
+            <strong>需要补充信息</strong>
+            <span>运行 #{{ activeRun.id }}</span>
+          </header>
+          <ul v-if="clarificationQuestions.length">
+            <li v-for="question in clarificationQuestions" :key="question">{{ question }}</li>
+          </ul>
+          <p v-else class="muted">当前运行需要补充说明后才能继续。</p>
+          <textarea
+            v-model="clarificationAnswer"
+            placeholder="补充回答后，系统会继续推进同一个运行。"
+            @keydown.enter.ctrl.prevent="resumeActiveRun"
+          />
+          <div class="v2-actions">
+            <button class="primary" type="button" :disabled="!canResumeRun" @click="resumeActiveRun">
+              {{ resumingRun ? '继续中...' : '提交补充并继续' }}
+            </button>
+          </div>
+        </section>
+
+        <TimelinePanel
+          :active-run="activeRun"
+          :steps="steps"
+          :task-ledger-items="taskLedgerItems"
+          :tool-invocations="toolInvocations"
+        />
+      </div>
 
       <WorkspaceComposer
         v-model:text-model-config-id="textModelConfigId"
         v-model:image-model-config-id="imageModelConfigId"
         v-model:candidate-count="candidateCount"
+        v-model:disable-clarification="disableClarification"
         v-model:prompt="prompt"
         :model-selection="modelSelection"
         :running="running"
+        :uploading="uploadingArtifact"
         :can-run="canRun"
         :can-retry="canRetryFailedRun"
         :error-message="errorMessage"
         @run="runAgent"
         @clear="prompt = ''"
         @retry="retryFailedRun"
-      />
-
-      <section v-if="activeRun?.status === 'waiting_user'" class="v2-clarification">
-        <header>
-          <strong>需要补充信息</strong>
-          <span>Run #{{ activeRun.id }}</span>
-        </header>
-        <ul v-if="clarificationQuestions.length">
-          <li v-for="question in clarificationQuestions" :key="question">{{ question }}</li>
-        </ul>
-        <p v-else class="muted">当前运行需要补充说明后才能继续。</p>
-        <textarea
-          v-model="clarificationAnswer"
-          placeholder="补充回答后，系统会继续推进同一个 run。"
-          @keydown.enter.ctrl.prevent="resumeActiveRun"
-        />
-        <div class="v2-actions">
-          <button class="primary" type="button" :disabled="!canResumeRun" @click="resumeActiveRun">
-            {{ resumingRun ? '继续中...' : '提交补充并继续' }}
-          </button>
-        </div>
-      </section>
-
-      <TimelinePanel
-        :active-run="activeRun"
-        :steps="steps"
-        :task-ledger-items="taskLedgerItems"
-        :tool-invocations="toolInvocations"
+        @upload="uploadArtifact"
       />
     </section>
 
-    <aside class="v2-artifacts">
+    <aside v-if="hasArtifactPanel" class="v2-artifacts">
       <header>
         <div>
-          <strong>Artifact Board</strong>
-          <span>{{ artifacts.length }} 个产物 · 按 Rank 排序</span>
+          <strong>产物</strong>
+          <span>{{ artifacts.length }} 个结果</span>
         </div>
         <button type="button" :disabled="!activeConversationId" @click="loadArtifacts">刷新</button>
       </header>
-
-      <section class="v2-upload-panel">
-        <label>
-          上传参考图
-          <input type="file" accept="image/png,image/jpeg,image/gif" @change="handleUploadFile" />
-        </label>
-        <button type="button" :disabled="!canUploadArtifact" @click="uploadArtifact">
-          {{ uploadingArtifact ? '上传中...' : '上传为产物' }}
-        </button>
-      </section>
 
       <ArtifactBoard
         :artifacts="rankedArtifacts"
@@ -114,21 +143,15 @@
         @toggle-compare="toggleCompareArtifact"
       />
 
-      <section v-if="compareArtifacts.length" class="v2-preview">
-        <div class="v2-preview-head">
-          <strong>候选对比</strong>
-          <button type="button" @click="compareArtifactIds = []">清空</button>
-        </div>
-        <div class="v2-compare-grid">
-          <article v-for="artifact in compareArtifacts" :key="artifact.id">
-            <img v-if="isPreviewableArtifact(artifact) && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
-            <strong>{{ artifact.name }}</strong>
-            <small>Rank {{ formatRankScore(artifact.rank_score) }}</small>
-          </article>
-        </div>
-      </section>
+      <nav v-if="selectedArtifact" class="v2-artifact-tabs" aria-label="产物面板">
+        <button type="button" :class="{ active: activeArtifactTab === 'preview' }" @click="activeArtifactTab = 'preview'">预览</button>
+        <button type="button" :class="{ active: activeArtifactTab === 'versions' }" @click="activeArtifactTab = 'versions'">版本</button>
+        <button type="button" :class="{ active: activeArtifactTab === 'edit' }" @click="activeArtifactTab = 'edit'">编辑</button>
+        <button type="button" :class="{ active: activeArtifactTab === 'review' }" @click="activeArtifactTab = 'review'">审核</button>
+        <button type="button" :class="{ active: activeArtifactTab === 'memory' }" @click="activeArtifactTab = 'memory'">记忆</button>
+      </nav>
 
-      <section v-if="selectedArtifact" class="v2-preview">
+      <section v-if="selectedArtifact && activeArtifactTab === 'preview'" class="v2-preview">
         <div class="v2-preview-head">
           <strong>{{ selectedArtifact.name }}</strong>
           <div class="v2-preview-actions">
@@ -147,12 +170,14 @@
       </section>
 
       <VersionStrip
-        :artifact-id="selectedArtifact?.id || 0"
-        :versions="versions"
+        v-if="selectedArtifact && activeArtifactTab === 'versions'"
         v-model:selected-version-id="selectedVersionId"
+        :artifact-id="selectedArtifact.id"
+        :versions="versions"
       />
 
       <EditPanel
+        v-if="selectedArtifact && activeArtifactTab === 'edit'"
         v-model:edit-prompt="editPrompt"
         v-model:render-title="renderTitle"
         v-model:render-subtitle="renderSubtitle"
@@ -167,84 +192,21 @@
       />
 
       <ReviewPanel
-        :artifact-id="selectedArtifact?.id || 0"
+        v-if="selectedArtifact && activeArtifactTab === 'review'"
+        :artifact-id="selectedArtifact.id"
         :quality-scores="selectedQualityScores"
         :review-status-text="reviewStatusText"
         :review-summary="reviewStep ? summarizeStep(reviewStep) : ''"
-        :artifact-rank-score="selectedArtifact?.rank_score"
+        :artifact-rank-score="selectedArtifact.rank_score"
       />
 
-      <section v-if="selectedArtifact" class="v2-feedback">
-        <label>
-          反馈
-          <select v-model="feedbackType">
-            <option value="selected">选中</option>
-            <option value="like">满意</option>
-            <option value="dislike">不满意</option>
-          </select>
-        </label>
-        <label>
-          评分
-          <select v-model.number="rating">
-            <option :value="0">不评分</option>
-            <option v-for="score in [1, 2, 3, 4, 5]" :key="score" :value="score">{{ score }}</option>
-          </select>
-        </label>
-        <textarea v-model="feedbackComment" placeholder="可选反馈说明" />
-        <button type="button" :disabled="feedbackSending" @click="sendFeedback">
-          {{ feedbackSending ? '提交中...' : '提交反馈' }}
-        </button>
-      </section>
-
-      <section class="v2-memory-panel">
-        <header>
-          <div>
-            <strong>Evolution</strong>
-            <span>{{ promptVersions.length }} versions</span>
-          </div>
-          <button type="button" :disabled="evolutionLoading" @click="loadEvolution">刷新</button>
-        </header>
-        <label>
-          Agent
-          <select v-model="evolutionAgent" :disabled="evolutionLoading" @change="loadEvolution">
-            <option value="prompt_agent">prompt_agent</option>
-            <option value="vision_review_agent">vision_review_agent</option>
-            <option value="ranker_agent">ranker_agent</option>
-            <option value="poster_render_agent">poster_render_agent</option>
-          </select>
-        </label>
-        <button type="button" :disabled="evolutionLoading" @click="draftPromptVersion">
-          {{ evolutionLoading ? '处理中...' : '生成 Prompt Draft' }}
-        </button>
-        <ul v-if="evolutionSummary.length" class="v2-memory-list">
-          <li v-for="item in evolutionSummary" :key="item.failure_type">
-            <div>
-              <strong>{{ item.failure_type }} · {{ item.count }}</strong>
-              <p>{{ item.action_item }}</p>
-            </div>
-          </li>
-        </ul>
-        <ul v-if="promptVersions.length" class="v2-memory-list">
-          <li v-for="version in promptVersions" :key="version.id">
-            <div>
-              <strong>{{ version.agent_name }} · {{ version.version }}</strong>
-              <p>{{ version.status }}</p>
-            </div>
-            <div class="v2-memory-actions">
-              <button v-if="version.status === 'draft'" type="button" @click="reviewPromptVersion(version.id)">Review</button>
-              <button v-if="version.status === 'review' || version.status === 'archived'" type="button" @click="activatePromptVersion(version.id)">Active</button>
-              <button v-if="version.status !== 'archived'" type="button" @click="archivePromptVersion(version.id)">Archive</button>
-            </div>
-          </li>
-        </ul>
-      </section>
-
       <MemoryPanel
+        v-if="activeArtifactTab === 'memory'"
+        v-model:status-filter="memoryStatusFilter"
         :conversation-id="activeConversationId || 0"
         :memories="memories"
         :displayed-memories="displayedMemories"
         :namespace="memoryNamespace"
-        v-model:status-filter="memoryStatusFilter"
         :loading="memoryLoading"
         :promoting-memory-id="promotingMemoryId"
         @refresh="loadMemories"
@@ -306,6 +268,7 @@ const modelSelection = ref<ModelSelection | null>(null)
 const textModelConfigId = ref(0)
 const imageModelConfigId = ref(0)
 const candidateCount = ref(1)
+const disableClarification = ref(false)
 const prompt = ref('')
 const running = ref(false)
 const errorMessage = ref('')
@@ -354,7 +317,15 @@ const clarificationAnswer = ref('')
 const resumingRun = ref(false)
 const lastRunState = ref<Record<string, unknown> | null>(null)
 const compareArtifactIds = ref<number[]>([])
+const activeArtifactTab = ref<'preview' | 'versions' | 'edit' | 'review' | 'memory'>('preview')
+const userMenuOpen = ref(false)
 const { startRunPolling, clearRunPolling } = useRunEvents(refreshRun)
+
+interface PromptHistoryItem {
+  id: number
+  content: string
+  createdAt: number
+}
 
 interface StepResultSnapshot {
   output?: {
@@ -362,24 +333,25 @@ interface StepResultSnapshot {
   }
 }
 
+const promptHistory = ref<PromptHistoryItem[]>([])
 const canRun = computed(() => Boolean(prompt.value.trim() && activeConversationId.value && !running.value))
 const canRetryFailedRun = computed(() => activeRun.value?.status === 'failed' && Boolean(retryPromptText().trim()) && Boolean(activeConversationId.value))
 const clarificationQuestions = computed(() => extractClarificationQuestions())
 const canResumeRun = computed(() => {
   return activeRun.value?.status === 'waiting_user' && Boolean(clarificationAnswer.value.trim()) && !resumingRun.value
 })
-const canUploadArtifact = computed(() => Boolean(activeConversationId.value && uploadFile.value && !uploadingArtifact.value))
 const canEditArtifact = computed(() => Boolean(selectedArtifact.value && selectedVersionId.value && editPrompt.value.trim() && !editingArtifact.value))
 const canRenderTextLayer = computed(() => Boolean(selectedArtifact.value?.kind === 'image' && selectedVersionId.value && renderTitle.value.trim() && !renderingTextLayer.value))
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
 const compareArtifacts = computed(() => rankedArtifacts.value.filter(artifact => compareArtifactIds.value.includes(artifact.id)))
+const hasArtifactPanel = computed(() => artifacts.value.length > 0)
 const reviewStep = computed(() => {
   return [...steps.value].reverse().find(step => step.step_key === 'vision_review_agent' || step.name === 'vision_review_agent') || null
 })
 const reviewStatusText = computed(() => {
-  if (selectedQualityScores.value?.reviewer) return selectedQualityScores.value.reviewer
-  if (reviewStep.value) return reviewStep.value.status
-  return 'pending'
+  if (selectedQualityScores.value?.reviewer) return reviewerLabel(selectedQualityScores.value.reviewer)
+  if (reviewStep.value) return runStatusLabel(reviewStep.value.status)
+  return '待审核'
 })
 const activeTitle = computed(() => {
   return conversations.value.find(item => item.id === activeConversationId.value)?.title || 'V2 图片工作台'
@@ -418,7 +390,7 @@ async function loadConversations() {
 async function createConversation() {
   const data = await apiFetch<{ conversation: Conversation }>('/api/conversations', {
     method: 'POST',
-    body: JSON.stringify({ title: 'V2 图片 Agent 会话' })
+    body: JSON.stringify({ title: 'V2 图片助手会话' })
   })
   conversations.value.unshift(data.conversation)
   await openConversation(data.conversation.id)
@@ -435,11 +407,13 @@ async function openConversation(id: number) {
   versions.value = []
   clarificationAnswer.value = ''
   compareArtifactIds.value = []
+  loadPromptHistory(id)
   await Promise.all([loadArtifacts(), loadMemories(), loadEvolution()])
 }
 
 async function runAgent() {
   if (!canRun.value || !activeConversationId.value) return
+  const originalPrompt = prompt.value.trim()
   running.value = true
   errorMessage.value = ''
   steps.value = []
@@ -447,12 +421,14 @@ async function runAgent() {
   toolInvocations.value = []
   clarificationAnswer.value = ''
   try {
+    recordPromptHistory(activeConversationId.value, originalPrompt)
     const data = await createAgentRun({
       conversationId: activeConversationId.value,
-      content: prompt.value.trim(),
+      content: originalPrompt,
       textModelConfigId: textModelConfigId.value,
       imageModelConfigId: imageModelConfigId.value,
-      candidateCount: candidateCount.value
+      candidateCount: candidateCount.value,
+      disableClarification: disableClarification.value
     })
     await applyRunResponse(data)
     if (data.agent_run?.id && ['created', 'queued', 'running'].includes(data.agent_run.status)) {
@@ -482,6 +458,39 @@ function retryPromptText() {
   if (selectedVersion.value?.prompt?.trim()) return selectedVersion.value.prompt
   if (activeRun.value?.optimized_prompt?.trim()) return activeRun.value.optimized_prompt
   return prompt.value
+}
+
+function promptHistoryKey(conversationId: number) {
+  return `agent_v2_prompt_history_${conversationId}`
+}
+
+function loadPromptHistory(conversationId: number) {
+  try {
+    const raw = localStorage.getItem(promptHistoryKey(conversationId))
+    const parsed = raw ? JSON.parse(raw) : []
+    promptHistory.value = Array.isArray(parsed)
+      ? parsed.filter(isPromptHistoryItem)
+      : []
+  } catch {
+    promptHistory.value = []
+  }
+}
+
+function recordPromptHistory(conversationId: number, content: string) {
+  if (!content.trim()) return
+  const nextItem: PromptHistoryItem = {
+    id: Date.now(),
+    content,
+    createdAt: Date.now()
+  }
+  promptHistory.value = [...promptHistory.value, nextItem]
+  localStorage.setItem(promptHistoryKey(conversationId), JSON.stringify(promptHistory.value))
+}
+
+function isPromptHistoryItem(value: unknown): value is PromptHistoryItem {
+  if (!value || typeof value !== 'object') return false
+  const item = value as Partial<PromptHistoryItem>
+  return typeof item.id === 'number' && typeof item.content === 'string' && typeof item.createdAt === 'number'
 }
 
 async function applyRunResponse(data: AgentV2RunResponse) {
@@ -588,6 +597,7 @@ async function loadArtifacts() {
 
 async function selectArtifact(artifact: Artifact) {
   selectedArtifact.value = artifact
+  activeArtifactTab.value = 'preview'
   selectedVersionId.value = 0
   feedbackComment.value = ''
   const data = await listArtifactVersions(artifact.id)
@@ -600,21 +610,18 @@ async function downloadSelected() {
   await downloadV2Artifact(selectedArtifact.value.id, selectedArtifact.value.name)
 }
 
-function handleUploadFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  uploadFile.value = input.files?.[0] || null
-}
-
-async function uploadArtifact() {
-  if (!activeConversationId.value || !uploadFile.value || uploadingArtifact.value) return
+async function uploadArtifact(file?: File) {
+  const selectedFile = file || uploadFile.value
+  if (!activeConversationId.value || !selectedFile || uploadingArtifact.value) return
   uploadingArtifact.value = true
   errorMessage.value = ''
   try {
-    const data = await uploadConversationArtifact(activeConversationId.value, uploadFile.value)
+    const data = await uploadConversationArtifact(activeConversationId.value, selectedFile)
     uploadFile.value = null
     await loadArtifacts()
     const current = artifacts.value.find(item => item.id === data.artifact.id) || data.artifact
     await selectArtifact(current)
+    activeArtifactTab.value = 'edit'
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '上传图片失败'
   } finally {
@@ -752,7 +759,7 @@ async function draftPromptVersion() {
     })
     await loadEvolution()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Prompt draft 生成失败'
+    errorMessage.value = error instanceof Error ? error.message : '提示词草稿生成失败'
   } finally {
     evolutionLoading.value = false
   }
@@ -777,7 +784,7 @@ async function updatePromptVersionLifecycle(id: number, action: string) {
     })
     await loadEvolution()
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : 'Prompt version 状态更新失败'
+    errorMessage.value = error instanceof Error ? error.message : '提示词版本状态更新失败'
   }
 }
 
@@ -801,7 +808,7 @@ async function promoteMemory(id: number) {
 }
 
 async function editMemory(memory: ContextMemory) {
-  const nextContent = window.prompt('Memory', memory.content)
+  const nextContent = window.prompt('记忆内容', memory.content)
   if (nextContent === null) return
   const content = nextContent.trim()
   if (!content || content === memory.content) return
@@ -827,7 +834,7 @@ function toggleCompareArtifact(artifactId: number) {
 }
 
 async function preloadArtifactPreviews(items: Artifact[]) {
-  await Promise.all(items.filter(item => item.kind === 'image').map(async item => {
+  await Promise.all(items.filter(item => item.kind === 'image' || item.kind === 'svg').map(async item => {
     if (previewURLs.value[item.id]) return
     try {
       const url = await fetchV2ArtifactPreviewURL(item.id)
@@ -893,15 +900,83 @@ function summarizeStep(step: AgentStep) {
   if (!step.output_json) return '等待结构化输出'
   try {
     const payload = JSON.parse(step.output_json)
-    return payload.summary || '已写入结构化输出'
+    return localizeSummary(payload.summary || '已写入结构化输出')
   } catch {
     return '已写入结构化输出'
   }
 }
 
+function reviewerLabel(reviewer: string) {
+  const labels: Record<string, string> = {
+    mock_vision_review: '模拟视觉审核',
+    real_vision_review: '真实视觉审核',
+    real_vision_ocr_review: '真实视觉与文字审核',
+    ranker_agent: '候选排序'
+  }
+  return labels[reviewer] || reviewer || '待审核'
+}
+
+function runStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    created: '已创建',
+    queued: '排队中',
+    running: '运行中',
+    waiting_user: '等待补充',
+    completed: '已完成',
+    failed: '失败',
+    retrying: '重试中',
+    cancelled: '已取消'
+  }
+  return labels[status] || status || '未知'
+}
+
+function promptVersionStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    draft: '草稿',
+    review: '审核中',
+    active: '已启用',
+    archived: '已归档'
+  }
+  return labels[status] || status || '未知'
+}
+
+function localizeSummary(summary: string) {
+  const value = String(summary || '').trim()
+  const map: Record<string, string> = {
+    'classified request as image_generation': '已识别为图片生成任务',
+    'extracted structured image requirements': '已提取结构化图片需求',
+    'prepared structured image prompt bundle': '已生成结构化图片提示词',
+    'text safety check passed': '文本安全检查已通过',
+    'mock vision review completed': '模拟视觉审核已完成',
+    'real vision review found no generated image': '视觉审核未找到生成图片',
+    'real vision review completed for image candidates': '候选图片视觉审核已完成',
+    'ranker found no candidate review': '排序器未找到候选审核结果',
+    'ranked image candidates': '候选图片排序已完成'
+  }
+  if (map[value]) return map[value]
+  const loaded = value.match(/^loaded (\d+) memory items$/)
+  if (loaded) return `已加载 ${loaded[1]} 条记忆`
+  const generated = value.match(/^generated (\d+) image candidate\(s\)$/)
+  if (generated) return `已生成 ${generated[1]} 张候选图片`
+  const persisted = value.match(/^persisted (\d+) artifact candidate\(s\)$/)
+  if (persisted) return `已保存 ${persisted[1]} 个候选产物`
+  const safety = value.match(/^image safety check passed for (\d+) candidate\(s\)$/)
+  if (safety) return `已通过 ${safety[1]} 张候选图片的安全检查`
+  return value
+}
+
 function formatTime(timestamp?: number) {
   if (!timestamp) return ''
   return new Date(timestamp * 1000).toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+function formatHistoryTime(timestamp: number) {
+  return new Date(timestamp).toLocaleString('zh-CN', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',

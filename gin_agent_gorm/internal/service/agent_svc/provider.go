@@ -25,6 +25,7 @@ type GenerationRequest struct {
 	Prompt          string
 	Intent          string
 	TaskType        string
+	AspectRatio     string
 	Stream          bool
 	ReturnReasoning bool
 	Temperature     string
@@ -628,7 +629,7 @@ func (provider *HTTPProvider) generateGoogleImagenImage(
 	parameters := map[string]interface{}{
 		"sampleCount": 1,
 	}
-	if aspectRatio := runtimeConfigString(provider.config, "aspect_ratio", "aspectRatio"); aspectRatio != "" {
+	if aspectRatio := coalesceImageAspectRatio(request.AspectRatio, runtimeConfigString(provider.config, "aspect_ratio", "aspectRatio")); aspectRatio != "" {
 		parameters["aspectRatio"] = aspectRatio
 	}
 	if personGeneration := runtimeConfigString(provider.config, "person_generation", "personGeneration"); personGeneration != "" {
@@ -654,6 +655,16 @@ func (provider *HTTPProvider) generateGoogleImagenImage(
 		return nil, err
 	}
 	return []GeneratedFile{file}, nil
+}
+
+func coalesceImageAspectRatio(values ...string) string {
+	for _, value := range values {
+		switch strings.TrimSpace(value) {
+		case "1:1", "3:4", "4:3", "16:9", "9:16":
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func (provider *HTTPProvider) generateJimengImage(

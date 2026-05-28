@@ -173,6 +173,41 @@ func TestExecutorPausesWhenRequirementNeedsClarification(t *testing.T) {
 	}
 }
 
+func TestExecutorContinuesWhenClarificationDisabled(t *testing.T) {
+	promptNode := &countingNode{
+		key:     "prompt_agent",
+		summary: "runs without clarification",
+	}
+	repo := &fakeRepository{}
+	executor := NewExecutor(repo)
+
+	state, err := executor.Execute(context.Background(), domain.RunState{
+		RunID:    1,
+		Metadata: map[string]string{"disable_clarification": "true"},
+	}, workflow.Sequential(
+		"clarification_disabled_test",
+		"0.1.0",
+		agents.NewMockAgent("requirement_agent", "needs clarification", map[string]interface{}{
+			"subject":            "poster",
+			"need_clarification": true,
+			"questions":          []string{"What product should be featured?"},
+		}),
+		promptNode,
+	))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if promptNode.calls != 1 {
+		t.Fatalf("prompt node calls = %d, want 1", promptNode.calls)
+	}
+	if repo.runStatus != domain.RunStatusCompleted {
+		t.Fatalf("run status = %q, want completed", repo.runStatus)
+	}
+	if state.Requirements.NeedClarification || len(state.Requirements.Questions) != 0 {
+		t.Fatalf("requirements = %#v, want clarification cleared", state.Requirements)
+	}
+}
+
 func TestExecutorDoesNotRetryBusinessError(t *testing.T) {
 	node := &flakyNode{
 		key:      "business_node",

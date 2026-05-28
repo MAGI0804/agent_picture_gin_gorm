@@ -1,7 +1,7 @@
 <template>
   <section v-if="artifact" class="v2-edit-panel">
     <label>
-      编辑 Prompt
+      编辑提示词
       <textarea
         :value="editPrompt"
         placeholder="描述要基于当前版本继续修改的内容。"

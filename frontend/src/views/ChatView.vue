@@ -229,9 +229,9 @@
         </footer>
       </section>
 
-      <div class="resize-handle" @mousedown="startResize('right')" />
+      <div v-if="hasArtifactPanel" class="resize-handle" @mousedown="startResize('right')" />
 
-      <aside class="artifact-panel" :style="{ width: panelWidth + 'px' }">
+      <aside v-if="hasArtifactPanel" class="artifact-panel" :style="{ width: panelWidth + 'px' }">
         <header>
           <strong>工作区</strong>
           <button :disabled="!activeConversationId" @click="refreshWorkspace">刷新</button>
@@ -519,6 +519,7 @@ const selectedTextModelId = computed(() => modelSelection.value?.text_model_conf
 const selectedImageModelId = computed(() => modelSelection.value?.image_model_config_id || 0)
 const selectedImageIndex = ref<number>(0)
 const imageArtifacts = computed(() => artifacts.value.filter(item => item.kind === 'image'))
+const hasArtifactPanel = computed(() => artifacts.value.length > 0)
 
 onMounted(async () => {
   await loadCurrentUser()
@@ -610,6 +611,7 @@ async function loadArtifacts() {
   cleanupPreviewURLs(nextArtifacts)
   await preloadArtifactPreviews(nextArtifacts)
   artifacts.value = nextArtifacts
+  selectedImageIndex.value = 0
 }
 
 async function sendNormal(useOptimizedPrompt = false) {
@@ -922,6 +924,7 @@ async function applySendResponse(data: SendMessageResponse) {
     cleanupPreviewURLs(data.artifacts)
     await preloadArtifactPreviews(data.artifacts)
     artifacts.value = data.artifacts
+    selectedImageIndex.value = 0
     if (data.artifacts.length) {
       rightTab.value = 'artifacts'
       appendProcessStep('图片已生成，右侧显示', `共 ${data.artifacts.length} 个产物。`, 'completed')

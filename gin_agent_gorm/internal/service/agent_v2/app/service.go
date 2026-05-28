@@ -56,12 +56,13 @@ type Service struct {
 
 // CreateRunRequest 是创建 Agent Run 的请求体。
 type CreateRunRequest struct {
-	Content            string `json:"content" form:"content" binding:"required"`
-	TaskType           string `json:"task_type" form:"task_type"`
-	IdempotencyKey     string `json:"idempotency_key" form:"idempotency_key"`
-	TextModelConfigID  uint   `json:"text_model_config_id" form:"text_model_config_id"`
-	ImageModelConfigID uint   `json:"image_model_config_id" form:"image_model_config_id"`
-	CandidateCount     int    `json:"candidate_count" form:"candidate_count"`
+	Content              string `json:"content" form:"content" binding:"required"`
+	TaskType             string `json:"task_type" form:"task_type"`
+	IdempotencyKey       string `json:"idempotency_key" form:"idempotency_key"`
+	TextModelConfigID    uint   `json:"text_model_config_id" form:"text_model_config_id"`
+	ImageModelConfigID   uint   `json:"image_model_config_id" form:"image_model_config_id"`
+	CandidateCount       int    `json:"candidate_count" form:"candidate_count"`
+	DisableClarification bool   `json:"disable_clarification" form:"disable_clarification"`
 }
 
 // ResumeRunRequest carries the user's clarification answer for a waiting run.
@@ -257,7 +258,7 @@ func (svc *Service) createRun(
 		ModelConfigID: imageConfig.GlobalID,
 		Capability: tools.Capability{
 			MaxPromptChars:  8000,
-			SupportedRatios: []string{"1:1", "4:3", "16:9", "9:16"},
+			SupportedRatios: []string{"1:1", "3:4", "4:3", "16:9", "9:16"},
 			MaxCandidates:   3,
 			CostPolicy:      "real_provider",
 		},
@@ -336,6 +337,9 @@ func (svc *Service) createRun(
 			"image_model_provider":  imageConfig.Config.Provider,
 			"image_model_name":      runtimeImageModelName(imageConfig.Config),
 		},
+	}
+	if request.DisableClarification {
+		state.Metadata["disable_clarification"] = "true"
 	}
 	if visionConfigErr == nil {
 		state.Metadata["vision_model_config_id"] = uintToString(visionConfig.GlobalID)
@@ -1240,7 +1244,10 @@ func mergeClarificationAnswer(state domain.RunState, answer string, createdAt in
 		Answer:    answer,
 		CreatedAt: createdAt,
 	})
-	state.UserRequest = appendClarificationToRequest(state.UserRequest, questions, answer)
+	if state.Metadata == nil {
+		state.Metadata = map[string]string{}
+	}
+	state.Metadata["latest_clarification_answer"] = answer
 	state.Requirements.NeedClarification = false
 	state.Requirements.Questions = []string{}
 	return state
@@ -1387,7 +1394,10 @@ func renderTextLayerSVG(backgroundRef string, layers []renderTextLayer) string {
 	builder.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">`)
 	builder.WriteString(`<defs><linearGradient id="poster-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1f2933"/><stop offset="58%" stop-color="#526d7a"/><stop offset="100%" stop-color="#e9c46a"/></linearGradient></defs>`)
 	builder.WriteString(`<rect width="100%" height="100%" fill="url(#poster-bg)"/>`)
-	builder.WriteString(`<rect x="44" y="88" width="780" height="240" rx="18" fill="rgba(0,0,0,0.32)"/>`)
+	if strings.TrimSpace(backgroundRef) != "" {
+		builder.WriteString(fmt.Sprintf(`<image href="%s" x="0" y="0" width="1080" height="1350" preserveAspectRatio="xMidYMid slice"/>`, html.EscapeString(backgroundRef)))
+	}
+	builder.WriteString(`<rect x="44" y="88" width="780" height="240" rx="18" fill="#000000" opacity="0.32"/>`)
 	for _, layer := range layers {
 		builder.WriteString(fmt.Sprintf(
 			`<text x="78" y="%d" fill="#fffaf0" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="%d" font-weight="%s">%s</text>`,
@@ -1396,9 +1406,6 @@ func renderTextLayerSVG(backgroundRef string, layers []renderTextLayer) string {
 			html.EscapeString(layer.Weight),
 			html.EscapeString(layer.Text),
 		))
-	}
-	if strings.TrimSpace(backgroundRef) != "" {
-		builder.WriteString(fmt.Sprintf(`<text x="48" y="1310" fill="rgba(255,255,255,0.72)" font-family="Arial, sans-serif" font-size="18">source: %s</text>`, html.EscapeString(backgroundRef)))
 	}
 	builder.WriteString(`</svg>`)
 	return builder.String()

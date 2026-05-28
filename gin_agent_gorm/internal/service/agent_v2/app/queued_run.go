@@ -128,7 +128,7 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 		ModelConfigID: imageConfig.GlobalID,
 		Capability: tools.Capability{
 			MaxPromptChars:  8000,
-			SupportedRatios: []string{"1:1", "4:3", "16:9", "9:16"},
+			SupportedRatios: []string{"1:1", "3:4", "4:3", "16:9", "9:16"},
 			MaxCandidates:   3,
 			CostPolicy:      "real_provider",
 		},

@@ -14,26 +14,9 @@
       @click="$emit('select', artifact)"
     >
       <img v-if="isPreviewableArtifact(artifact) && previewURLs[artifact.id]" :src="previewURLs[artifact.id]" :alt="artifact.name" />
-      <span v-else>{{ artifact.kind }}</span>
-      <strong>{{ artifact.name }}</strong>
-      <small>{{ artifact.mime_type }}</small>
-      <div class="v2-artifact-metrics">
-        <small>#{{ index + 1 }}</small>
-        <small>Rank {{ formatRankScore(artifact.rank_score) }}</small>
-      </div>
-      <div class="v2-artifact-badges">
-        <small v-if="artifact.id === recommendedArtifactId" class="v2-recommended-badge">推荐</small>
-        <small v-if="artifact.selected_at" class="v2-selected-badge">已选中</small>
-        <small v-if="compareIds.includes(artifact.id)" class="v2-selected-badge">对比</small>
-      </div>
-      <label class="v2-compare-toggle" @click.stop>
-        <input
-          type="checkbox"
-          :checked="compareIds.includes(artifact.id)"
-          @change="$emit('toggleCompare', artifact.id)"
-        />
-        对比
-      </label>
+      <span v-else class="v2-artifact-fallback">{{ artifactLabel(artifact.kind) }}</span>
+      <strong>{{ index + 1 }}</strong>
+      <small>{{ artifact.name }}</small>
     </button>
     <p v-if="!artifacts.length" class="muted">暂无产物。</p>
   </section>
@@ -55,13 +38,13 @@ defineEmits<{
   toggleCompare: [artifactId: number]
 }>()
 
-function formatRankScore(score?: number) {
-  if (typeof score !== 'number') return '-'
-  if (score >= 0 && score <= 1) return `${Math.round(score * 100)}`
-  return score.toFixed(2)
-}
-
 function isPreviewableArtifact(artifact: Artifact) {
   return artifact.kind === 'image' || artifact.kind === 'svg'
+}
+
+function artifactLabel(kind: string) {
+  if (kind === 'svg') return 'SVG'
+  if (kind === 'image') return 'IMG'
+  return kind || 'FILE'
 }
 </script>

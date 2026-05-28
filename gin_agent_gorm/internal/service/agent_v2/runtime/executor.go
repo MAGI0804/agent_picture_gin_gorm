@@ -542,6 +542,10 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 			state.Requirements.NeedClarification = needClarification
 		}
 		state.Requirements.Questions = parseIssueList(result.Output["questions"])
+		if clarificationDisabled(state) {
+			state.Requirements.NeedClarification = false
+			state.Requirements.Questions = []string{}
+		}
 		if scene, ok := result.Output["scene"].(string); ok {
 			state.Requirements.Scene = scene
 		}
@@ -598,6 +602,14 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		}
 	}
 	return state
+}
+
+func clarificationDisabled(state domain.RunState) bool {
+	if state.Metadata == nil {
+		return false
+	}
+	value := strings.ToLower(strings.TrimSpace(state.Metadata["disable_clarification"]))
+	return value == "true" || value == "1" || value == "yes"
 }
 
 func parseStringMap(value interface{}) map[string]string {

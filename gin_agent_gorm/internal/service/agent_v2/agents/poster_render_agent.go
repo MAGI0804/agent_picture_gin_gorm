@@ -143,9 +143,9 @@ func renderPosterSVG(backgroundRef string, layers []posterTextLayer, aspectRatio
 	builder.WriteString(`<defs><linearGradient id="poster-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#17202a"/><stop offset="55%" stop-color="#314d63"/><stop offset="100%" stop-color="#f2c572"/></linearGradient></defs>`)
 	builder.WriteString(`<rect width="100%" height="100%" fill="url(#poster-bg)"/>`)
 	if strings.TrimSpace(backgroundRef) != "" {
-		builder.WriteString(fmt.Sprintf(`<text x="48" y="%d" fill="rgba(255,255,255,0.72)" font-family="Arial, sans-serif" font-size="18">source: %s</text>`, height-40, html.EscapeString(backgroundRef)))
+		builder.WriteString(fmt.Sprintf(`<image href="%s" x="0" y="0" width="%d" height="%d" preserveAspectRatio="xMidYMid slice"/>`, html.EscapeString(backgroundRef), width, height))
 	}
-	builder.WriteString(`<rect x="44" y="88" width="72%" height="230" rx="18" fill="rgba(0,0,0,0.32)"/>`)
+	builder.WriteString(`<rect x="44" y="88" width="72%" height="230" rx="18" fill="#000000" opacity="0.32"/>`)
 	for _, layer := range layers {
 		builder.WriteString(fmt.Sprintf(
 			`<text x="78" y="%d" fill="#fffaf0" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="%d" font-weight="%s">%s</text>`,

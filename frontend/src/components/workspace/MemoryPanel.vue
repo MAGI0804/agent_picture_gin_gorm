@@ -2,29 +2,29 @@
   <section class="v2-memory-panel">
     <header>
       <div>
-        <strong>Memory</strong>
+            <strong>记忆</strong>
         <span>{{ memories.length }} 条</span>
       </div>
       <button type="button" :disabled="loading || !conversationId" @click="$emit('refresh')">刷新</button>
     </header>
     <label>
-      Status
+      状态
       <select :value="statusFilter" @change="$emit('update:statusFilter', ($event.target as HTMLSelectElement).value)">
-        <option value="">all</option>
-        <option value="proposal">proposal</option>
-        <option value="stable">stable</option>
+        <option value="">全部</option>
+        <option value="proposal">候选</option>
+        <option value="stable">稳定</option>
       </select>
     </label>
     <label>
-      Namespace
+      命名空间
       <select :value="namespace" :disabled="loading" @change="$emit('namespaceChange', ($event.target as HTMLSelectElement).value)">
         <option value="">全部</option>
-        <option value="conversation">conversation</option>
-        <option value="user_profile">user_profile</option>
-        <option value="visual_style">visual_style</option>
-        <option value="artifact_lineage">artifact_lineage</option>
-        <option value="tool_experience">tool_experience</option>
-        <option value="reflection">reflection</option>
+        <option value="conversation">会话</option>
+        <option value="user_profile">用户画像</option>
+        <option value="visual_style">视觉风格</option>
+        <option value="artifact_lineage">产物链路</option>
+        <option value="tool_experience">工具经验</option>
+        <option value="reflection">复盘</option>
       </select>
     </label>
     <ul v-if="displayedMemories.length" class="v2-memory-list">
@@ -33,11 +33,11 @@
           <strong>{{ memory.namespace || memory.kind }}</strong>
           <p>{{ memory.content }}</p>
           <small>
-            {{ formatConfidence(memory.confidence) }} · used {{ memory.use_count || 0 }}
+            {{ formatConfidence(memory.confidence) }} · 使用 {{ memory.use_count || 0 }} 次
             <span v-if="isMemoryProposal(memory)" class="v2-memory-proposal-badge">候选</span>
           </small>
           <small v-if="memory.source_type || memory.artifact_id">
-            {{ memory.source_type || 'source' }} #{{ memory.source_id || memory.artifact_id }}
+            {{ memory.source_type || '来源' }} #{{ memory.source_id || memory.artifact_id }}
           </small>
         </div>
         <div class="v2-memory-actions">
@@ -81,8 +81,8 @@ defineEmits<{
 }>()
 
 function formatConfidence(confidence?: number) {
-  if (typeof confidence !== 'number' || confidence <= 0) return 'confidence -'
-  return `confidence ${Math.round(confidence * 100)}`
+  if (typeof confidence !== 'number' || confidence <= 0) return '置信度 -'
+  return `置信度 ${Math.round(confidence * 100)}`
 }
 
 function isMemoryProposal(memory: ContextMemory) {

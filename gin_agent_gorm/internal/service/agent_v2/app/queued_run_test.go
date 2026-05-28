@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"testing"
 
 	"gin-biz-web-api/internal/service/agent_v2/domain"
@@ -53,7 +52,7 @@ func TestMetadataUintParsesModelConfigID(t *testing.T) {
 	}
 }
 
-func TestMergeClarificationAnswerAppendsAnswerAndClearsWaitingState(t *testing.T) {
+func TestMergeClarificationAnswerRecordsAnswerAndKeepsOriginalRequest(t *testing.T) {
 	state := domain.RunState{
 		UserRequest: "make a product poster",
 		Requirements: domain.ImageRequirements{
@@ -70,11 +69,14 @@ func TestMergeClarificationAnswerAppendsAnswerAndClearsWaitingState(t *testing.T
 	if len(merged.Requirements.Questions) != 0 {
 		t.Fatalf("Questions = %#v, want cleared", merged.Requirements.Questions)
 	}
-	if !strings.Contains(merged.UserRequest, "Feature the cold brew bottle.") {
-		t.Fatalf("UserRequest = %q, want appended answer", merged.UserRequest)
+	if merged.UserRequest != "make a product poster" {
+		t.Fatalf("UserRequest = %q, want original request preserved", merged.UserRequest)
 	}
 	if len(merged.Clarifications) != 1 || merged.Clarifications[0].Answer != "Feature the cold brew bottle." {
 		t.Fatalf("Clarifications = %#v, want recorded clarification", merged.Clarifications)
+	}
+	if merged.Metadata["latest_clarification_answer"] != "Feature the cold brew bottle." {
+		t.Fatalf("Metadata latest_clarification_answer = %#v, want answer", merged.Metadata)
 	}
 	if merged.Clarifications[0].CreatedAt != 123 {
 		t.Fatalf("CreatedAt = %d, want 123", merged.Clarifications[0].CreatedAt)

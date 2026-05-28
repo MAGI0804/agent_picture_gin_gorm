@@ -15,6 +15,7 @@ func TestHTTPProviderGenerateGoogleImagenImage(t *testing.T) {
 	var gotAPIKey string
 	var gotPrompt string
 	var gotSampleCount float64
+	var gotAspectRatio string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
@@ -26,6 +27,7 @@ func TestHTTPProviderGenerateGoogleImagenImage(t *testing.T) {
 			} `json:"instances"`
 			Parameters struct {
 				SampleCount float64 `json:"sampleCount"`
+				AspectRatio string  `json:"aspectRatio"`
 			} `json:"parameters"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -35,6 +37,7 @@ func TestHTTPProviderGenerateGoogleImagenImage(t *testing.T) {
 			gotPrompt = payload.Instances[0].Prompt
 		}
 		gotSampleCount = payload.Parameters.SampleCount
+		gotAspectRatio = payload.Parameters.AspectRatio
 
 		response := map[string]interface{}{
 			"predictions": []map[string]interface{}{
@@ -58,7 +61,7 @@ func TestHTTPProviderGenerateGoogleImagenImage(t *testing.T) {
 		},
 	}
 
-	files, err := provider.Generate(GenerationRequest{Prompt: "a precise product render"})
+	files, err := provider.Generate(GenerationRequest{Prompt: "a precise product render", AspectRatio: "3:4"})
 	if err != nil {
 		t.Fatalf("Generate() error = %v", err)
 	}
@@ -73,6 +76,9 @@ func TestHTTPProviderGenerateGoogleImagenImage(t *testing.T) {
 	}
 	if gotSampleCount != 1 {
 		t.Fatalf("sampleCount = %v, want 1", gotSampleCount)
+	}
+	if gotAspectRatio != "3:4" {
+		t.Fatalf("aspectRatio = %q, want request aspect ratio", gotAspectRatio)
 	}
 	if len(files) != 1 {
 		t.Fatalf("files len = %d, want 1", len(files))

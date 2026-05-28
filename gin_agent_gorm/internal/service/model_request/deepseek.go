@@ -14,7 +14,7 @@ import (
 	"gin-biz-web-api/model"
 )
 
-var deepseekHTTPClient = createHTTPClient(300 * time.Second)
+var deepseekHTTPClient = &http.Client{Timeout: 300 * time.Second}
 
 // DeepseekChatRequest Deepseek 模型聊天请求参数。
 type DeepseekChatRequest struct {

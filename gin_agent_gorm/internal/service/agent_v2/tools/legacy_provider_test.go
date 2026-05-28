@@ -130,6 +130,9 @@ func TestLegacyProviderAdapterGenerateImageStoresGeneratedFiles(t *testing.T) {
 	if provider.generationRequest.Prompt != "a clean poster" {
 		t.Fatalf("Prompt = %q, want %q", provider.generationRequest.Prompt, "a clean poster")
 	}
+	if provider.generationRequest.AspectRatio != "16:9" {
+		t.Fatalf("AspectRatio = %q, want request ratio", provider.generationRequest.AspectRatio)
+	}
 }
 
 func TestLegacyProviderAdapterPrefixesMultiCandidateObjectKeys(t *testing.T) {

@@ -185,6 +185,49 @@ func TestRequirementAgentFallsBackOnInvalidProviderJSON(t *testing.T) {
 	}
 }
 
+func TestRequirementAgentAcceptsProviderListFieldsAsStrings(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{
+			Text: `{
+				"subject": "children fashion model on white background",
+				"style": "commercial catalog photography",
+				"aspect_ratio": "3:4",
+				"must_include": "pink dress child model",
+				"must_avoid": "watermark, blur",
+				"need_clarification": false,
+				"questions": "",
+				"scene": "studio portrait",
+				"composition": "full body model with clean background",
+				"text_policy": "render text separately",
+				"layout_hints": "leave right side clean\navoid covering the dress",
+				"target_use": "kids clothing catalog"
+			}`,
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	result, err := NewRequirementAgentWithText(registry, 7).Run(context.Background(), domain.RunState{
+		UserRequest: "children clothing model, white background, pink dress",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output["aspect_ratio"] != "3:4" {
+		t.Fatalf("aspect_ratio = %#v, want 3:4", result.Output["aspect_ratio"])
+	}
+	hints, ok := result.Output["layout_hints"].([]string)
+	if !ok || len(hints) != 2 {
+		t.Fatalf("layout_hints = %#v, want split string hints", result.Output["layout_hints"])
+	}
+}
+
 func TestRequirementAgentAsksClarificationForVagueRequest(t *testing.T) {
 	agent := NewRequirementAgent()
 
@@ -200,6 +243,22 @@ func TestRequirementAgentAsksClarificationForVagueRequest(t *testing.T) {
 	questions, ok := result.Output["questions"].([]string)
 	if !ok || len(questions) == 0 {
 		t.Fatalf("questions = %#v, want clarification questions", result.Output["questions"])
+	}
+}
+
+func TestRequirementAgentAsksTargetedClarificationQuestions(t *testing.T) {
+	result, err := NewRequirementAgent().Run(context.Background(), domain.RunState{
+		UserRequest: "white background",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	questions, ok := result.Output["questions"].([]string)
+	if !ok || len(questions) == 0 {
+		t.Fatalf("questions = %#v, want targeted clarification", result.Output["questions"])
+	}
+	if !strings.Contains(questions[0], "\u4e3b\u4f53") {
+		t.Fatalf("first question = %q, want subject-specific question", questions[0])
 	}
 }
 

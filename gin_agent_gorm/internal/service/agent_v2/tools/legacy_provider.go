@@ -105,6 +105,7 @@ func (adapter *LegacyProviderAdapter) GenerateImage(
 		Prompt:          strings.TrimSpace(request.Prompt),
 		Intent:          request.Intent,
 		TaskType:        request.TaskType,
+		AspectRatio:     request.AspectRatio,
 		Stream:          true,
 		ReturnReasoning: true,
 		Temperature:     coalesceString(request.Temperature, adapter.config.Temperature),

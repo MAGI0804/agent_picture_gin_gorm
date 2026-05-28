@@ -1,7 +1,7 @@
 <template>
   <section v-if="artifactId" class="v2-review-panel">
     <header>
-      <strong>Review / Eval</strong>
+      <strong>审核 / 评测</strong>
       <small>{{ reviewStatusText }}</small>
     </header>
     <div v-if="qualityScores" class="v2-score-block">
@@ -10,23 +10,23 @@
         <strong>{{ formatScore(qualityScores.overall_score) }}</strong>
       </div>
       <div>
-        <span>Requirement</span>
+        <span>需求匹配</span>
         <strong>{{ formatScore(qualityScores.requirement_match) }}</strong>
       </div>
       <div>
-        <span>Composition</span>
+        <span>构图</span>
         <strong>{{ formatScore(qualityScores.composition_score) }}</strong>
       </div>
       <div>
-        <span>Text</span>
+        <span>文字</span>
         <strong>{{ formatScore(qualityScores.text_readability) }}</strong>
       </div>
       <div>
-        <span>Layout</span>
+        <span>版式</span>
         <strong>{{ formatScore(qualityScores.layout_score) }}</strong>
       </div>
       <div>
-        <span>Refine</span>
+        <span>需优化</span>
         <strong>{{ qualityScores.should_refine ? '需要' : '不需要' }}</strong>
       </div>
       <div>
@@ -39,10 +39,10 @@
     </ul>
     <p v-else-if="!qualityScores" class="muted">暂无版本质量分。</p>
     <p v-if="qualityScores?.extracted_text" class="muted">
-      OCR: {{ qualityScores.extracted_text }}
+      识别文字：{{ qualityScores.extracted_text }}
     </p>
     <details v-if="reviewSummary" class="v2-step-detail">
-      <summary>vision_review_agent</summary>
+      <summary>视觉审核</summary>
       <p>{{ reviewSummary }}</p>
     </details>
   </section>

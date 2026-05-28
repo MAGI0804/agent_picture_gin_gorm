@@ -104,7 +104,7 @@ func (agent *RequirementAgent) runWithTextProvider(ctx context.Context, state do
 	if err != nil {
 		return domain.StepResult{}, fmt.Errorf("requirement text provider failed: %w", err)
 	}
-	requirements, err := parseRequirementJSON(result.Text, state.UserRequest)
+	requirements, err := parseRequirementJSON(result.Text, clarifiedRequirementText(state))
 	if err != nil {
 		return domain.StepResult{}, fmt.Errorf("invalid requirement json: %w", err)
 	}
@@ -454,18 +454,18 @@ func (agent *ArtifactAgent) Run(ctx context.Context, state domain.RunState) (dom
 }
 
 type requirementProviderOutput struct {
-	Subject           string   `json:"subject"`
-	Style             string   `json:"style"`
-	AspectRatio       string   `json:"aspect_ratio"`
-	MustInclude       []string `json:"must_include"`
-	MustAvoid         []string `json:"must_avoid"`
-	NeedClarification bool     `json:"need_clarification"`
-	Questions         []string `json:"questions"`
-	Scene             string   `json:"scene"`
-	Composition       string   `json:"composition"`
-	TextPolicy        string   `json:"text_policy"`
-	LayoutHints       []string `json:"layout_hints"`
-	TargetUse         string   `json:"target_use"`
+	Subject           string             `json:"subject"`
+	Style             string             `json:"style"`
+	AspectRatio       string             `json:"aspect_ratio"`
+	MustInclude       flexibleStringList `json:"must_include"`
+	MustAvoid         flexibleStringList `json:"must_avoid"`
+	NeedClarification bool               `json:"need_clarification"`
+	Questions         flexibleStringList `json:"questions"`
+	Scene             string             `json:"scene"`
+	Composition       string             `json:"composition"`
+	TextPolicy        string             `json:"text_policy"`
+	LayoutHints       flexibleStringList `json:"layout_hints"`
+	TargetUse         string             `json:"target_use"`
 }
 
 type promptProviderOutput struct {
@@ -476,14 +476,14 @@ type promptProviderOutput struct {
 }
 
 func fallbackRequirementResult(state domain.RunState, schemaIssue string) domain.StepResult {
-	userRequest := strings.TrimSpace(state.UserRequest)
+	userRequest := clarifiedRequirementText(state)
 	textPolicy := "image model may render simple text when needed"
 	layoutHints := []string{}
 	if shouldRenderTextSeparately(userRequest) {
 		textPolicy = "render text separately"
 		layoutHints = append(layoutHints, "reserve clean space for text overlay")
 	}
-	questions := inferClarificationQuestions(userRequest)
+	questions := inferSmartClarificationQuestions(userRequest)
 	requirements := domain.ImageRequirements{
 		Subject:           truncateRunes(userRequest, 120),
 		Style:             inferStyle(userRequest),
@@ -576,7 +576,7 @@ func parseRequirementJSON(raw string, userRequest string) (domain.ImageRequireme
 		requirements.TargetUse = inferTargetUse(userRequest)
 	}
 	if requirements.NeedClarification && len(requirements.Questions) == 0 {
-		requirements.Questions = defaultClarificationQuestions()
+		requirements.Questions = inferSmartClarificationQuestions(userRequest)
 	}
 	return requirements, nil
 }
@@ -615,6 +615,54 @@ func parsePromptJSON(raw string, state domain.RunState) (domain.PromptBundle, er
 	return bundle, nil
 }
 
+type flexibleStringList []string
+
+func (list *flexibleStringList) UnmarshalJSON(data []byte) error {
+	var array []string
+	if err := json.Unmarshal(data, &array); err == nil {
+		*list = array
+		return nil
+	}
+	var single string
+	if err := json.Unmarshal(data, &single); err == nil {
+		*list = splitProviderList(single)
+		return nil
+	}
+	var object map[string]interface{}
+	if err := json.Unmarshal(data, &object); err == nil {
+		values := make([]string, 0, len(object))
+		for _, value := range object {
+			switch typed := value.(type) {
+			case string:
+				values = append(values, typed)
+			case []interface{}:
+				for _, item := range typed {
+					if text, ok := item.(string); ok {
+						values = append(values, text)
+					}
+				}
+			}
+		}
+		*list = nonEmptyStrings(values)
+		return nil
+	}
+	return errors.New("expected string, string array, or object")
+}
+
+func splitProviderList(value string) []string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	replacer := strings.NewReplacer("\r\n", "\n", "\r", "\n", ";", "\n", "；", "\n", "、", "\n")
+	value = replacer.Replace(value)
+	parts := strings.Split(value, "\n")
+	if len(parts) == 1 {
+		parts = strings.Split(value, ",")
+	}
+	return nonEmptyStrings(parts)
+}
+
 func decodeProviderJSONObject(raw string, target interface{}) error {
 	raw = strings.TrimSpace(raw)
 	start := strings.Index(raw, "{")
@@ -632,7 +680,9 @@ func requirementAgentSystemPrompt() string {
 	return strings.Join([]string{
 		"Return strict JSON only for an image generation requirement schema.",
 		"Required keys: subject, style, aspect_ratio, must_include, must_avoid, need_clarification, questions, scene, composition, text_policy, layout_hints, target_use.",
-		"Supported aspect_ratio values: 1:1, 4:3, 16:9, 9:16.",
+		"All list fields must be JSON arrays of strings. Supported aspect_ratio values: 1:1, 3:4, 4:3, 16:9, 9:16.",
+		"When clarifications are present, merge the latest answer into subject, scene, must_include, style, and aspect_ratio instead of copying the question text.",
+		"Ask only targeted missing-information questions; do not repeat generic questions when the user already gave subject, background, style, or ratio details.",
 		"For Chinese posters or complex text, set text_policy to render text separately.",
 	}, "\n")
 }
@@ -651,6 +701,7 @@ func promptAgentSystemPrompt() string {
 		"Return strict JSON only for an image model prompt bundle.",
 		"Required keys: positive_prompt, negative_prompt, render_text_separately, params.",
 		"params must include aspect_ratio when known.",
+		"Use clarifications as final user intent; do not copy clarification questions into the image prompt.",
 		"Use stable memory context only as factual constraints; do not invent unsupported claims.",
 	}, "\n")
 }
@@ -659,6 +710,7 @@ func promptAgentPrompt(state domain.RunState) string {
 	return marshalPromptPayload(map[string]interface{}{
 		"user_request":   state.UserRequest,
 		"requirements":   state.Requirements,
+		"clarifications": state.Clarifications,
 		"memory_context": state.MemoryContext,
 	})
 }
@@ -761,7 +813,7 @@ func constrainedCandidateCount(requested int, maxCandidates int) int {
 
 func isAllowedAspectRatio(value string) bool {
 	switch strings.TrimSpace(value) {
-	case "1:1", "4:3", "16:9", "9:16":
+	case "1:1", "3:4", "4:3", "16:9", "9:16":
 		return true
 	default:
 		return false
@@ -773,6 +825,8 @@ func inferAspectRatio(text string) string {
 	switch {
 	case strings.Contains(normalized, "9:16"), strings.Contains(normalized, "vertical"):
 		return "9:16"
+	case strings.Contains(normalized, "3:4"):
+		return "3:4"
 	case strings.Contains(normalized, "1:1"), strings.Contains(normalized, "square"):
 		return "1:1"
 	case strings.Contains(normalized, "4:3"):
@@ -879,4 +933,97 @@ func coalesce(value string, fallback string) string {
 		return strings.TrimSpace(fallback)
 	}
 	return value
+}
+
+func inferSmartClarificationQuestions(text string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return smartClarificationQuestions(false, false, false)
+	}
+	hasSubject := hasImageSubject(normalized)
+	hasStyle := hasImageStyle(normalized)
+	hasRatio := hasImageRatio(normalized)
+	for _, request := range []string{
+		"make an image",
+		"generate an image",
+		"draw a picture",
+		"\u505a\u4e00\u5f20\u56fe",
+		"\u751f\u6210\u56fe\u7247",
+		"\u968f\u4fbf\u505a",
+	} {
+		if normalized == request {
+			return smartClarificationQuestions(false, false, false)
+		}
+	}
+	if len([]rune(normalized)) < 8 || len(strings.Fields(normalized)) <= 2 {
+		return smartClarificationQuestions(hasSubject, hasStyle, hasRatio)
+	}
+	if !hasSubject {
+		return smartClarificationQuestions(false, hasStyle, hasRatio)
+	}
+	return []string{}
+}
+
+func smartClarificationQuestions(hasSubject bool, hasStyle bool, hasRatio bool) []string {
+	questions := make([]string, 0, 3)
+	if !hasSubject {
+		questions = append(questions, "\u753b\u9762\u4e3b\u4f53\u662f\u4ec0\u4e48\uff1f\u8bf7\u5c3d\u91cf\u8bf4\u660e\u4eba\u7269\u3001\u5546\u54c1\u3001\u573a\u666f\u6216\u6838\u5fc3\u5143\u7d20\u3002")
+	}
+	if !hasStyle {
+		questions = append(questions, "\u60f3\u8981\u4ec0\u4e48\u98ce\u683c\u548c\u7528\u9014\uff1f\u4f8b\u5982\u5199\u5b9e\u6444\u5f71\u3001\u7535\u5546\u4e3b\u56fe\u3001\u6d77\u62a5\u6216\u63d2\u753b\u3002")
+	}
+	if !hasRatio {
+		questions = append(questions, "\u753b\u9762\u6bd4\u4f8b\u9700\u8981\u54ea\u4e00\u79cd\uff1f\u53ef\u9009 1:1\u30013:4\u30014:3\u300116:9 \u6216 9:16\u3002")
+	}
+	if len(questions) > 3 {
+		return questions[:3]
+	}
+	return questions
+}
+
+func hasImageSubject(normalized string) bool {
+	for _, signal := range []string{
+		"girl", "boy", "person", "model", "product", "coffee", "poster", "logo", "dress", "child",
+		"\u5973\u5b69", "\u7537\u5b69", "\u5b69\u5b50", "\u6a21\u7279", "\u4ea7\u54c1", "\u5546\u54c1", "\u5496\u5561", "\u6d77\u62a5", "\u7ae5\u88c5", "\u88d9\u5b50", "\u80cc\u666f",
+	} {
+		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasImageStyle(normalized string) bool {
+	for _, signal := range []string{
+		"photo", "realistic", "poster", "illustration", "anime", "commercial", "catalog", "white background", "studio",
+		"\u5199\u5b9e", "\u6444\u5f71", "\u6d77\u62a5", "\u63d2\u753b", "\u7535\u5546", "\u4e3b\u56fe", "\u767d\u8272\u80cc\u666f", "\u767d\u5e95", "\u5f71\u68da",
+	} {
+		if strings.Contains(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasImageRatio(normalized string) bool {
+	return strings.Contains(normalized, "1:1") ||
+		strings.Contains(normalized, "3:4") ||
+		strings.Contains(normalized, "4:3") ||
+		strings.Contains(normalized, "16:9") ||
+		strings.Contains(normalized, "9:16") ||
+		strings.Contains(normalized, "square") ||
+		strings.Contains(normalized, "vertical") ||
+		strings.Contains(normalized, "\u6bd4\u4f8b") ||
+		strings.Contains(normalized, "\u7ad6\u7248") ||
+		strings.Contains(normalized, "\u6a2a\u7248")
+}
+
+func clarifiedRequirementText(state domain.RunState) string {
+	parts := []string{state.UserRequest}
+	for _, turn := range state.Clarifications {
+		if answer := strings.TrimSpace(turn.Answer); answer != "" {
+			parts = append(parts, answer)
+		}
+	}
+	return strings.Join(nonEmptyStrings(parts), "\n")
 }
