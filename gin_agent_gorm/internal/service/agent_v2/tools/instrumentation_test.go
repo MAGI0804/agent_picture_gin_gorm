@@ -87,9 +87,52 @@ func TestInstrumentToolRecordsProviderFailure(t *testing.T) {
 	}
 }
 
+func TestInstrumentToolRecordsSafetyWithoutPromptLeak(t *testing.T) {
+	provider := &fakeTracingSafetyProvider{result: SafetyResult{Allowed: true, Reason: "allowed"}}
+	store := &fakeInvocationStore{}
+	tool := InstrumentTool(Tool{
+		Name:           "safety",
+		Kind:           KindSafety,
+		Provider:       "local",
+		Model:          "policy-v1",
+		SafetyProvider: provider,
+	}, store)
+
+	_, err := tool.SafetyProvider.CheckContent(context.Background(), SafetyRequest{
+		UserID: 7,
+		RunID:  9,
+		StepID: 11,
+		Text:   "very sensitive prompt with token abc",
+	})
+	if err != nil {
+		t.Fatalf("CheckContent() error = %v", err)
+	}
+	if store.created.AgentRunID != 9 || store.created.AgentStepID != 11 || store.created.UserID != 7 {
+		t.Fatalf("created invocation identifiers = %#v", store.created)
+	}
+	if strings.Contains(store.created.InputJSON, "sensitive prompt") || strings.Contains(store.created.InputJSON, "token abc") {
+		t.Fatalf("InputJSON leaked safety text: %s", store.created.InputJSON)
+	}
+	if store.updated["status"] != "completed" {
+		t.Fatalf("updated status = %#v, want completed", store.updated["status"])
+	}
+}
+
 type fakeTracingImageProvider struct {
 	result ImageGenerationResult
 	err    error
+}
+
+type fakeTracingSafetyProvider struct {
+	result SafetyResult
+	err    error
+}
+
+func (provider *fakeTracingSafetyProvider) CheckContent(ctx context.Context, request SafetyRequest) (SafetyResult, error) {
+	if provider.err != nil {
+		return SafetyResult{}, provider.err
+	}
+	return provider.result, nil
 }
 
 func (provider *fakeTracingImageProvider) GenerateImage(ctx context.Context, request ImageGenerationRequest) (ImageGenerationResult, error) {

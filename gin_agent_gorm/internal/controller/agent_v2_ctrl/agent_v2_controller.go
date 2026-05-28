@@ -365,7 +365,7 @@ func (ctrl *AgentV2Controller) UploadArtifact(c *gin.Context) {
 		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "read upload file failed")
 		return
 	}
-	artifact, version, err := app.NewService().UploadArtifact(userID, app.UploadArtifactInput{
+	artifact, version, err := app.NewService().UploadArtifact(c.Request.Context(), userID, app.UploadArtifactInput{
 		ConversationID: conversationID,
 		FileName:       header.Filename,
 		ContentType:    header.Header.Get("Content-Type"),

@@ -116,6 +116,9 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 	}
 
 	registry := tools.NewRegistry()
+	if err := registerSafetyTool(registry, svc.dao); err != nil {
+		return workflow.Workflow{}, err
+	}
 	imageAdapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
 	if err := registry.Register(tools.InstrumentTool(tools.Tool{
 		Name:          runtimeImageModelName(imageConfig.Config),

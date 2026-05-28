@@ -253,6 +253,9 @@ type SegmentationResult struct {
 }
 
 type SafetyRequest struct {
+	UserID   uint
+	RunID    uint
+	StepID   uint
 	Text     string
 	ImageRef string
 }

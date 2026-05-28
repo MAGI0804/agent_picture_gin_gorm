@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gin-biz-web-api/internal/service/agent_svc"
+	agentsecurity "gin-biz-web-api/internal/service/agent_v2/security"
 	"gin-biz-web-api/model"
 )
 
@@ -199,6 +200,8 @@ func generatedObjectKey(request ImageGenerationRequest, name string, index int) 
 		fmt.Sprintf("user-%d", request.UserID),
 		fmt.Sprintf("conversation-%d", request.ConversationID),
 		fmt.Sprintf("run-%d", request.RunID),
+		"objects",
+		agentsecurity.RandomObjectKeyPart(),
 		name,
 	)
 }
@@ -216,6 +219,7 @@ func editObjectKey(request ImageEditRequest, name string, index int) string {
 		fmt.Sprintf("conversation-%d", request.ConversationID),
 		runPart,
 		"edits",
+		agentsecurity.RandomObjectKeyPart(),
 		name,
 	)
 }

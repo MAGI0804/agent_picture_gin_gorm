@@ -57,10 +57,12 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 		agents.NewRequirementAgentWithText(options.Registry, options.TextModelConfigID),
 		agents.NewMemoryAgent(),
 		agents.NewPromptAgentWithText(options.Registry, options.TextModelConfigID),
+		agents.NewSafetyAgent("pre_generation_safety_agent", agents.SafetyPhaseText, options.Registry),
 		agents.NewImageGenerationAgent(options.Registry, agents.ImageGenerationAgentOptions{
 			ImageModelConfigID: options.ImageModelConfigID,
 			CandidateCount:     options.CandidateCount,
 		}),
+		agents.NewSafetyAgent("post_generation_safety_agent", agents.SafetyPhaseImage, options.Registry),
 		agents.NewArtifactAgent(options.ArtifactWriter, agents.ArtifactAgentOptions{
 			ModelProvider: options.ModelProvider,
 			ModelName:     options.ModelName,

@@ -3,8 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +26,7 @@ import (
 	evalsvc "gin-biz-web-api/internal/service/agent_v2/eval"
 	memorysvc "gin-biz-web-api/internal/service/agent_v2/memory"
 	"gin-biz-web-api/internal/service/agent_v2/runtime"
+	agentsecurity "gin-biz-web-api/internal/service/agent_v2/security"
 	"gin-biz-web-api/internal/service/agent_v2/tools"
 	"gin-biz-web-api/internal/service/agent_v2/workflow"
 	"gin-biz-web-api/model"
@@ -246,6 +245,9 @@ func (svc *Service) createRun(
 	visionConfig, visionConfigErr := svc.resolveVisionRuntimeModelConfig(userID)
 
 	registry := tools.NewRegistry()
+	if err := registerSafetyTool(registry, svc.dao); err != nil {
+		return nil, err
+	}
 	imageAdapter := tools.NewLegacyProviderAdapter(imageConfig.Config)
 	if err := registry.Register(tools.InstrumentTool(tools.Tool{
 		Name:          runtimeImageModelName(imageConfig.Config),
@@ -813,7 +815,7 @@ func (svc *Service) ListArtifacts(userID uint, conversationID uint) ([]model.Art
 }
 
 // UploadArtifact validates and stores a user uploaded image as artifact version v1.
-func (svc *Service) UploadArtifact(userID uint, input UploadArtifactInput) (model.Artifact, model.ArtifactVersion, error) {
+func (svc *Service) UploadArtifact(ctx context.Context, userID uint, input UploadArtifactInput) (model.Artifact, model.ArtifactVersion, error) {
 	if userID == 0 {
 		return model.Artifact{}, model.ArtifactVersion{}, errors.New("upload user_id is required")
 	}
@@ -821,7 +823,7 @@ func (svc *Service) UploadArtifact(userID uint, input UploadArtifactInput) (mode
 	if err != nil {
 		return model.Artifact{}, model.ArtifactVersion{}, err
 	}
-	metadata, err := validateImageUpload(input.Content, input.ContentType)
+	metadata, err := validateImageUpload(input.Content, input.FileName, input.ContentType)
 	if err != nil {
 		return model.Artifact{}, model.ArtifactVersion{}, err
 	}
@@ -829,6 +831,9 @@ func (svc *Service) UploadArtifact(userID uint, input UploadArtifactInput) (mode
 	objectKey := uploadObjectKey(userID, conversation.ID, name)
 	stored, err := agent_svc.NewObjectStore().Save(objectKey, input.Content)
 	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	if err := svc.checkImageSafety(ctx, userID, stored.ObjectKey); err != nil {
 		return model.Artifact{}, model.ArtifactVersion{}, err
 	}
 	params, _ := json.Marshal(map[string]interface{}{
@@ -882,6 +887,9 @@ func (svc *Service) EditArtifact(ctx context.Context, userID uint, artifactID ui
 	if err != nil {
 		return model.ArtifactVersion{}, err
 	}
+	if err := svc.checkTextSafety(ctx, userID, prompt); err != nil {
+		return model.ArtifactVersion{}, err
+	}
 	versions, err := svc.artifacts.ListVersions(userID, artifactID)
 	if err != nil {
 		return model.ArtifactVersion{}, err
@@ -932,6 +940,9 @@ func (svc *Service) EditArtifact(ctx context.Context, userID uint, artifactID ui
 		return model.ArtifactVersion{}, errors.New("image edit provider returned no images")
 	}
 	image := result.Images[0]
+	if err := svc.checkImageSafety(ctx, userID, image.ObjectKey); err != nil {
+		return model.ArtifactVersion{}, err
+	}
 	sourceRefs, _ := json.Marshal(map[string]interface{}{
 		"artifact_id":       artifact.ID,
 		"parent_version_id": parent.ID,
@@ -1277,7 +1288,7 @@ type imageUploadMetadata struct {
 	Height   int
 }
 
-func validateImageUpload(content []byte, contentType string) (imageUploadMetadata, error) {
+func validateImageUpload(content []byte, fileName string, contentType string) (imageUploadMetadata, error) {
 	if len(content) == 0 {
 		return imageUploadMetadata{}, errors.New("upload image is empty")
 	}
@@ -1290,6 +1301,9 @@ func validateImageUpload(content []byte, contentType string) (imageUploadMetadat
 	}
 	if contentType = strings.TrimSpace(strings.Split(contentType, ";")[0]); contentType != "" && !strings.EqualFold(contentType, detected) {
 		return imageUploadMetadata{}, fmt.Errorf("upload mime mismatch: header %q detected %q", contentType, detected)
+	}
+	if err := agentsecurity.ValidateImageExtension(fileName, detected); err != nil {
+		return imageUploadMetadata{}, err
 	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(content))
 	if err != nil {
@@ -1340,19 +1354,9 @@ func uploadObjectKey(userID uint, conversationID uint, name string) string {
 		fmt.Sprintf("user-%d", userID),
 		fmt.Sprintf("conversation-%d", conversationID),
 		"uploads",
-		fmt.Sprintf("%d-%s-%s", time.Now().UnixNano(), randomHex(6), name),
+		agentsecurity.RandomObjectKeyPart(),
+		name,
 	)
-}
-
-func randomHex(byteCount int) string {
-	if byteCount <= 0 {
-		return ""
-	}
-	buffer := make([]byte, byteCount)
-	if _, err := rand.Read(buffer); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 16)
-	}
-	return hex.EncodeToString(buffer)
 }
 
 func selectParentVersion(versions []model.ArtifactVersion, requestedID uint) (model.ArtifactVersion, error) {

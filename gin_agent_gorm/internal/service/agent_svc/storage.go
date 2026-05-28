@@ -3,9 +3,11 @@ package agent_svc
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gin-biz-web-api/global"
 	"gin-biz-web-api/pkg/config"
@@ -45,6 +47,11 @@ func NewObjectStore() ObjectStore {
 
 // Save 将文件内容写入本地磁盘，并返回预览地址、大小和 hash。
 func (store *LocalObjectStore) Save(objectKey string, content []byte) (StoredObject, error) {
+	normalizedKey, err := normalizeObjectKey(objectKey)
+	if err != nil {
+		return StoredObject{}, err
+	}
+	objectKey = normalizedKey
 	fullPath := store.Path(objectKey)
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		return StoredObject{}, err
@@ -63,6 +70,32 @@ func (store *LocalObjectStore) Save(objectKey string, content []byte) (StoredObj
 
 // Path 根据对象 key 返回本地文件绝对路径。
 func (store *LocalObjectStore) Path(objectKey string) string {
-	cleanKey := filepath.Clean(objectKey)
+	cleanKey, err := normalizeObjectKey(objectKey)
+	if err != nil {
+		cleanKey = "invalid-object-key"
+	}
 	return filepath.Join(store.rootPath, cleanKey)
+}
+
+func normalizeObjectKey(objectKey string) (string, error) {
+	objectKey = filepath.ToSlash(strings.TrimSpace(objectKey))
+	objectKey = strings.TrimPrefix(objectKey, "/")
+	for _, part := range strings.Split(objectKey, "/") {
+		if part == ".." {
+			return "", errors.New("object key contains unsafe path segment")
+		}
+	}
+	cleanKey := filepath.ToSlash(filepath.Clean(objectKey))
+	if cleanKey == "." || cleanKey == "" {
+		return "", errors.New("object key is empty")
+	}
+	for _, part := range strings.Split(cleanKey, "/") {
+		if part == ".." || part == "" {
+			return "", errors.New("object key contains unsafe path segment")
+		}
+	}
+	if filepath.IsAbs(cleanKey) || strings.Contains(cleanKey, ":") {
+		return "", errors.New("object key must be relative")
+	}
+	return filepath.FromSlash(cleanKey), nil
 }

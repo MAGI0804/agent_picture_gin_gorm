@@ -37,6 +37,9 @@ func InstrumentTool(tool Tool, store InvocationStore) Tool {
 	if tool.OCRProvider != nil {
 		tool.OCRProvider = instrumentedOCRProvider{tool: tool, store: store, next: tool.OCRProvider}
 	}
+	if tool.SafetyProvider != nil {
+		tool.SafetyProvider = instrumentedSafetyProvider{tool: tool, store: store, next: tool.SafetyProvider}
+	}
 	return tool
 }
 
@@ -130,6 +133,23 @@ func (provider instrumentedOCRProvider) ExtractText(ctx context.Context, request
 	}
 	result, err := provider.next.ExtractText(ctx, request)
 	finishInvocation(provider.store, invocation.ID, startedAt, ocrOutputSummary(result), provider.tool.Capability.CostPolicy, err)
+	return result, err
+}
+
+type instrumentedSafetyProvider struct {
+	tool  Tool
+	store InvocationStore
+	next  SafetyProvider
+}
+
+func (provider instrumentedSafetyProvider) CheckContent(ctx context.Context, request SafetyRequest) (SafetyResult, error) {
+	startedAt := time.Now()
+	invocation, startErr := startInvocation(provider.store, provider.tool, request.UserID, request.RunID, request.StepID, safetyInputSummary(request), startedAt)
+	if startErr != nil {
+		return SafetyResult{}, startErr
+	}
+	result, err := provider.next.CheckContent(ctx, request)
+	finishInvocation(provider.store, invocation.ID, startedAt, safetyOutputSummary(result), provider.tool.Capability.CostPolicy, err)
 	return result, err
 }
 
@@ -260,6 +280,20 @@ func ocrOutputSummary(result OCRResult) map[string]interface{} {
 		"layout_score":     result.LayoutScore,
 		"issues":           result.Issues,
 		"should_refine":    result.ShouldRefine,
+	}
+}
+
+func safetyInputSummary(request SafetyRequest) map[string]interface{} {
+	return map[string]interface{}{
+		"text_chars":        len(request.Text),
+		"image_ref_present": strings.TrimSpace(request.ImageRef) != "",
+	}
+}
+
+func safetyOutputSummary(result SafetyResult) map[string]interface{} {
+	return map[string]interface{}{
+		"allowed": result.Allowed,
+		"reason":  result.Reason,
 	}
 }
 

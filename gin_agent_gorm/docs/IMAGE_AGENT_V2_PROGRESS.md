@@ -1,7 +1,7 @@
 # 图片 AI Agent V2 开发进度记录
 
 生成日期：2026-05-25  
-最近更新：2026-05-27
+最近更新：2026-05-28
 维护规则：每次完成开发任务后都必须更新本文档，明确记录“做了哪一步、做了哪些、哪些没做、验收是否通过”。
 
 参考文档：
@@ -103,8 +103,8 @@
 
 | 指南章节 | 要求 | 当前状态 | 已完成 | 未完成 / 风险 |
 | --- | --- | --- | --- | --- |
-| 17 安全权限合规 | artifact 预览/下载/编辑校验 user/conversation，上传限制，object key 不可预测，日志脱敏 | 部分完成 | DAO/service 查询按 user_id；memory delete 按 user_id；V2 preview/download/feedback/list/version 均通过 user 范围校验；旧版和 V2 前端预览均改用带 token header 的 blob；V2 列表/版本响应隐藏 object key 和静态 preview；access log 跳过二进制响应并脱敏 token/query；静态 `/artifacts` 默认关闭，可通过 `AIAgent.Storage.StaticEnabled=true` 临时恢复 | 签名 URL、上传限制、安全审查、object key 随机策略未系统化 |
-| 21.9 安全与合规 | 不暴露静态路径作为权限边界 | 已完成第一版 | 旧版 Chat 与 V2 Workspace 预览均走鉴权 API；`/artifacts` 静态路由改为配置开关，当前默认关闭 | 短期签名 URL 未做 |
+| 17 安全权限合规 | artifact 预览/下载/编辑校验 user/conversation，上传限制，object key 不可预测，日志脱敏 | 已完成第一版 | DAO/service 查询按 user_id；memory delete 按 user_id；V2 preview/download/edit/feedback/list/version 均通过 user 范围校验；旧版和 V2 前端预览均改用带 token header 的 blob；V2 列表/版本响应隐藏 object key 和静态 preview；上传会校验大小、MIME、像素、扩展名并走 SafetyProvider 图片安全检查；生成/edit 会做文本前置和图片后置安全检查；upload/generate/edit/render object key 已加入随机路径段；LocalObjectStore 拒绝路径穿越；access log 跳过上传/二进制体并递归脱敏 token、API key、prompt/content/messages；静态 `/artifacts` 默认关闭，可通过 `AIAgent.Storage.StaticEnabled=true` 临时恢复 | 短期签名 URL 未做，仍按外链分享需求延后 |
+| 21.9 安全与合规 | 不暴露静态路径作为权限边界 | 已完成第一版 | 旧版 Chat 与 V2 Workspace 预览均走鉴权 API；`/artifacts` 静态路由改为配置开关，当前默认关闭；当前不新增外链分享，下载/预览继续以鉴权 API 为唯一入口 | 如后续确需外链分享，再补短期签名 URL |
 
 ### 2.10 实施计划和 MVP
 
@@ -289,6 +289,7 @@ npm run build
 | 2026-05-28 | Task 11：上传图、图生图编辑和版本链 | 新增上传接口 `POST /api/v2/conversations/:id/artifacts/upload`，校验 MIME、大小和像素后写入 artifact/version，`operation=upload`；新增 `ImageEditProvider` 适配层、tool invocation 追踪和 `POST /api/v2/artifacts/:id/edit`，可基于指定 version 追加 `operation=edit` 子版本并保留 `parent_version_id/source_refs`；前端 `/workspace` 增加参考图上传、编辑 prompt 和继续编辑入口，旧版本仍通过 version strip 查看。当前编辑 provider 先复用现有图片生成 provider，原生 image-to-image/mask/segmentation 仍待后续模型适配。 | `go test ./internal/service/agent_v2/app ./internal/service/agent_v2/tools ./internal/service/agent_v2/artifact ./internal/controller/agent_v2_ctrl ./routers -count=1`、`npm run build` 通过 |
 | 2026-05-28 | Task 12：海报/品牌图文字分层渲染 | 新增 `poster_render_agent`，在 `render_text_separately=true` 时基于已生成底图创建 SVG 文字分层 artifact，`parent_artifact_id/parent_version_id/source_refs` 保留底图和排版链路；Artifact Service 新增 rendered artifact 写入能力；新增 `POST /api/v2/artifacts/:id/render-text`，前端 `/workspace` 可编辑标题、副标题、品牌文案并生成 SVG 分层产物，SVG 可走现有鉴权 preview/download。当前为后端 SVG text layer 第一版，Canvas 导出和更细排版控制后续继续增强。 | `go test ./internal/service/agent_v2/agents ./internal/service/agent_v2/artifact ./internal/service/agent_v2/runtime ./internal/service/agent_v2/workflow ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers -count=1`、`npm run build` 通过 |
 | 2026-05-28 | Task 13：Evolution / Eval / Prompt 版本治理 | 新增 `eval_cases`、`eval_runs` model、AutoMigrate 和 DAO；新增 `EvolutionService`，可聚合最近 reflection 失败原因 Top 5、从低分 action item 生成 prompt version draft，并支持 `draft -> review -> active -> archived` 状态流转，激活时会归档同 agent 旧 active 版本；新增 `/api/v2/evolution/summary`、prompt version draft/list/review/activate/archive 和 `/api/v2/eval/cases|runs` 基础 API；前端 `/workspace` 增加轻量 Evolution 面板。当前 eval run 先记录结果，不自动执行真实评测集。 | `go test ./model ./bootstrap ./internal/dao/agent_v2_dao ./internal/service/agent_v2/eval ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers -count=1`、`npm run build` 通过 |
+| 2026-05-28 | Task 14：安全、存储和合规边界 | 新增 `agent_v2/security` 本地安全策略、静态 `SafetyProvider` 适配和 tool invocation 埋点；workflow 在 prompt 后执行生成前文本安全审查，在图片生成后执行图片安全审查，upload/edit 也会走安全检查；上传补齐扩展名/MIME/像素/大小校验；upload/generate/edit/render object key 增加随机不可预测路径段；LocalObjectStore 增加路径穿越防护；access log 跳过上传/二进制体并递归脱敏 token、API key、prompt/content/messages；外链分享不新增，继续保持鉴权 preview/download API 和静态 `/artifacts` 默认关闭。 | `go test ./internal/service/agent_v2/security ./internal/service/agent_v2/tools ./internal/service/agent_v2/agents ./internal/service/agent_v2/workflow ./internal/service/agent_v2/app ./internal/service/agent_v2/artifact ./internal/service/agent_svc ./internal/middleware ./internal/controller/agent_v2_ctrl ./routers -count=1` 通过 |
 
 ## 9. Google 模型数据库配置
 

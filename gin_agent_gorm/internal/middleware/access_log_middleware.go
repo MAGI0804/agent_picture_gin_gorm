@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -94,11 +95,14 @@ func AccessLog() gin.HandlerFunc {
 
 		// 记录请求体内容 eg：`"x=33&y=zz"`
 		var logRequestBody string
-		if "multipart/form-data" == c.ContentType() {
+		if shouldSkipBodyLog(c.ContentType(), requestPath) {
+			logRequestBody = "[body skipped]"
+		} else if "multipart/form-data" == c.ContentType() {
 			// 上传文件时，不会记录上传文件资源数据
-			logRequestBody = c.Request.PostForm.Encode()
+			logRequestBody = sanitizedLogText(c.Request.PostForm.Encode())
 		} else {
 			logRequestBody, _ = url.QueryUnescape(string(requestBody)) // 中文会被加码，因此为了方便查看中文参数，对请求体进行解码
+			logRequestBody = sanitizedLogText(logRequestBody)
 		}
 		logFields = append(logFields, zap.String("request_body", logRequestBody))
 
@@ -107,13 +111,26 @@ func AccessLog() gin.HandlerFunc {
 		if skipResponseBody {
 			logResponseBody = "[binary content skipped]"
 		} else {
-			logResponseBody = responseBodyWriter.body.String()
+			logResponseBody = sanitizedLogText(responseBodyWriter.body.String())
 		}
 		logFields = append(logFields, zap.String("response_body", logResponseBody))
 
 		// 记录访问日志
 		logger.Info("HTTP Access Log [ "+cast.ToString(responseStatus)+" ]", logFields...)
 
+	}
+}
+
+func shouldSkipBodyLog(contentType string, requestPath string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if strings.HasPrefix(requestPath, "/api/v2/conversations/") && strings.HasSuffix(requestPath, "/artifacts/upload") {
+		return true
+	}
+	switch contentType {
+	case "image/png", "image/jpeg", "image/gif", "application/octet-stream":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -133,11 +150,99 @@ func sanitizedHeaders(headers http.Header) map[string][]string {
 
 func isSensitiveHeader(key string) bool {
 	switch strings.ToLower(key) {
-	case "authorization", "cookie", "set-cookie", "token", "x-api-key", "api_key", "apikey", "access_token":
+	case "authorization", "cookie", "set-cookie", "token", "x-api-key", "api_key", "apikey", "access_token", "auth_token", "anthropic_auth_token", "secret", "secret_key", "password":
 		return true
 	default:
 		return false
 	}
+}
+
+func isSensitiveLogKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	if isSensitiveHeader(normalized) {
+		return true
+	}
+	switch normalized {
+	case "api-key", "api key", "access key", "secret access key", "prompt", "positive_prompt", "negative_prompt", "system", "messages", "content", "image", "image_data", "body":
+		return true
+	default:
+		return strings.Contains(normalized, "token") ||
+			strings.Contains(normalized, "api_key") ||
+			strings.Contains(normalized, "apikey") ||
+			strings.Contains(normalized, "secret")
+	}
+}
+
+func sanitizedLogText(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	if strings.Contains(body, "data:image/") || strings.Contains(body, "base64,") {
+		return "[binary content skipped]"
+	}
+	var payload interface{}
+	if err := json.Unmarshal([]byte(body), &payload); err == nil {
+		data, marshalErr := json.Marshal(redactLogValue(payload))
+		if marshalErr == nil {
+			return string(data)
+		}
+	}
+	if looksLikeFormBody(body) {
+		values, err := url.ParseQuery(body)
+		if err == nil && len(values) > 0 {
+			for key := range values {
+				if isSensitiveLogKey(key) {
+					values.Set(key, "[REDACTED]")
+				}
+			}
+			return values.Encode()
+		}
+	}
+	return redactKnownPairs(body)
+}
+
+func looksLikeFormBody(body string) bool {
+	return strings.Contains(body, "=") || strings.Contains(body, "&")
+}
+
+func redactLogValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		result := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			if isSensitiveLogKey(key) {
+				result[key] = "[REDACTED]"
+				continue
+			}
+			result[key] = redactLogValue(item)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for index, item := range typed {
+			result[index] = redactLogValue(item)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func redactKnownPairs(body string) string {
+	if !looksLikeFormBody(body) {
+		return body
+	}
+	values, err := url.ParseQuery(strings.ReplaceAll(body, "\n", "&"))
+	if err != nil || len(values) == 0 {
+		return body
+	}
+	for key := range values {
+		if isSensitiveLogKey(key) {
+			values.Set(key, "[REDACTED]")
+		}
+	}
+	return values.Encode()
 }
 
 func sanitizedURLString(host string, requestURL *url.URL) string {
@@ -167,7 +272,7 @@ func sanitizedRawQuery(rawQuery string) string {
 		return rawQuery
 	}
 	for key := range values {
-		if isSensitiveHeader(key) {
+		if isSensitiveLogKey(key) {
 			values.Set(key, "[REDACTED]")
 		}
 	}

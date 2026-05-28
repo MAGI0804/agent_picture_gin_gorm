@@ -115,8 +115,8 @@ func TestLegacyProviderAdapterGenerateImageStoresGeneratedFiles(t *testing.T) {
 	if image.Name != "poster.png" {
 		t.Fatalf("Name = %q, want sanitized filename", image.Name)
 	}
-	if image.ObjectKey != "user-7/conversation-8/run-9/poster.png" {
-		t.Fatalf("ObjectKey = %q, want scoped key", image.ObjectKey)
+	if !strings.HasPrefix(image.ObjectKey, "user-7/conversation-8/run-9/objects/") || !strings.HasSuffix(image.ObjectKey, "/poster.png") {
+		t.Fatalf("ObjectKey = %q, want randomized scoped key", image.ObjectKey)
 	}
 	if image.SizeBytes != int64(len("png-bytes")) {
 		t.Fatalf("SizeBytes = %d, want %d", image.SizeBytes, len("png-bytes"))
@@ -159,11 +159,16 @@ func TestLegacyProviderAdapterPrefixesMultiCandidateObjectKeys(t *testing.T) {
 	if len(result.Images) != 2 {
 		t.Fatalf("len(Images) = %d, want 2", len(result.Images))
 	}
-	if result.Images[0].ObjectKey != "user-7/conversation-8/run-9/candidate-2-poster.png" {
-		t.Fatalf("first ObjectKey = %q, want candidate-indexed key", result.Images[0].ObjectKey)
+	if !strings.HasPrefix(result.Images[0].ObjectKey, "user-7/conversation-8/run-9/objects/") ||
+		!strings.HasSuffix(result.Images[0].ObjectKey, "/candidate-2-poster.png") {
+		t.Fatalf("first ObjectKey = %q, want randomized candidate-indexed key", result.Images[0].ObjectKey)
 	}
-	if result.Images[1].ObjectKey != "user-7/conversation-8/run-9/candidate-3-poster.png" {
-		t.Fatalf("second ObjectKey = %q, want candidate-indexed key", result.Images[1].ObjectKey)
+	if !strings.HasPrefix(result.Images[1].ObjectKey, "user-7/conversation-8/run-9/objects/") ||
+		!strings.HasSuffix(result.Images[1].ObjectKey, "/candidate-3-poster.png") {
+		t.Fatalf("second ObjectKey = %q, want randomized candidate-indexed key", result.Images[1].ObjectKey)
+	}
+	if result.Images[0].ObjectKey == result.Images[1].ObjectKey {
+		t.Fatalf("candidate object keys should differ: %#v", result.Images)
 	}
 }
 
@@ -195,8 +200,9 @@ func TestLegacyProviderAdapterEditImageStoresEditedFilesWithSourceRefsInPrompt(t
 	if len(result.Images) != 1 {
 		t.Fatalf("len(Images) = %d, want 1", len(result.Images))
 	}
-	if result.Images[0].ObjectKey != "user-7/conversation-8/manual/edits/edited.png" {
-		t.Fatalf("ObjectKey = %q, want manual edit scoped key", result.Images[0].ObjectKey)
+	if !strings.HasPrefix(result.Images[0].ObjectKey, "user-7/conversation-8/manual/edits/") ||
+		!strings.HasSuffix(result.Images[0].ObjectKey, "/edited.png") {
+		t.Fatalf("ObjectKey = %q, want randomized manual edit scoped key", result.Images[0].ObjectKey)
 	}
 	if store.objectKey != result.Images[0].ObjectKey || string(store.content) != "edited-bytes" {
 		t.Fatalf("stored key/content = %q/%q, want edited image", store.objectKey, string(store.content))

@@ -16,6 +16,11 @@ func init() {
 				"public_path":    config.Get("AIAgent.Storage.PublicPath", "/artifacts"),
 				"static_enabled": config.Get("AIAgent.Storage.StaticEnabled", false),
 			},
+			"safety": map[string]interface{}{
+				"enabled":       config.Get("AIAgent.Safety.Enabled", true),
+				"fail_closed":   config.Get("AIAgent.Safety.FailClosed", true),
+				"blocked_terms": config.Get("AIAgent.Safety.BlockedTerms", []string{}),
+			},
 			"proxy": map[string]interface{}{
 				"enabled": config.Get("AIAgent.Proxy.Enabled", false),
 				"http":    config.Get("AIAgent.Proxy.HTTP", "http://127.0.0.1:22307"),

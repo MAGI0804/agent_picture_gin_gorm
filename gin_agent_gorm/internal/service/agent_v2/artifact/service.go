@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gin-biz-web-api/internal/service/agent_svc"
+	agentsecurity "gin-biz-web-api/internal/service/agent_v2/security"
 	"gin-biz-web-api/model"
 )
 
@@ -319,7 +320,8 @@ func (svc *Service) CreateRenderedArtifact(input CreateRenderedArtifactInput) (m
 		fmt.Sprintf("conversation-%d", input.ConversationID),
 		runPart,
 		"rendered",
-		fmt.Sprintf("%d-%s", time.Now().UnixNano(), name),
+		agentsecurity.RandomObjectKeyPart(),
+		name,
 	)
 	stored, err := agent_svc.NewObjectStore().Save(objectKey, input.Content)
 	if err != nil {
