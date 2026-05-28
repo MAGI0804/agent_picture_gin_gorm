@@ -19,9 +19,9 @@
       </section>
 
       <div class="sidebar-nav">
-        <button type="button" @click="router.push('/chat')">
+        <button type="button" @click="router.push('/workspace')">
           <span class="nav-icon icon-chat" aria-hidden="true"></span>
-          对话
+          V2 工作台
         </button>
         <button class="active" type="button">
           <span class="nav-icon icon-settings" aria-hidden="true"></span>

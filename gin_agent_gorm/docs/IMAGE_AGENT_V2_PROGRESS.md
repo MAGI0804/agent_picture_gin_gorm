@@ -13,7 +13,7 @@
 
 ## 1. 当前总状态
 
-当前方向没有偏离重写计划：新能力继续放在 `internal/service/agent_v2`、`internal/dao/agent_v2_dao`、`internal/controller/agent_v2_ctrl` 和 `/api/v2` 下，旧 `agent_svc` 未继续扩展为 V2 能力。
+当前方向没有偏离重写计划：新能力继续放在 `internal/service/agent_v2`、`internal/dao/agent_v2_dao`、`internal/controller/agent_v2_ctrl` 和 `/api/v2` 下，旧 `agent_svc` 已标记 deprecated，仅保留历史会话和旧 artifact 兼容能力。
 
 当前系统状态：
 
@@ -22,7 +22,7 @@
 | V2 后端骨架 | 已完成 | Run、Step、Workflow、Runtime、DAO、基础 Service 已具备 |
 | 第15节第一轮验收 | 代码链路已闭环 | `/api/v2/conversations/:id/runs` 已接真实 provider adapter、真实 Requirement/Prompt/Image/Artifact/Review Agent 链路、artifact version 写库、V2 前端入口；真实外部模型端到端仍依赖用户配置可用图片模型 |
 | 第16节第二轮后端能力 | 已完成后端切片 | Memory 查询/删除、candidate group、selected artifact、vision review mock、reflection draft、basic budget、idempotency key、V2 鉴权预览代理、review quality_scores 写入、feedback/review memory proposal、proposal 去重/晋级、Prompt 高置信记忆带入、异步 Run 后端第一版、候选补齐生成、逐候选 review 和 Ranker 精排已实现 |
-| 前端 V2 Workspace | 已完成组件化第一版 | 新增 `/workspace`，支持输入、模型选择、运行、timeline、artifact board、候选 rank 排序、推荐/选中标识、版本、下载、反馈、选择按钮、Memory 入口、Review/Eval 面板、鉴权预览 blob；Task 15 已拆出 API client、composables 和 Composer/Timeline/ArtifactBoard/VersionStrip/ReviewPanel/MemoryPanel/EditPanel 组件，并补齐失败重试、候选对比和刷新后恢复最近 run |
+| 前端 V2 Workspace | 已完成组件化第一版 | 默认入口已迁移到 `/workspace`；支持输入、模型选择、运行、timeline、artifact board、候选 rank 排序、推荐/选中标识、版本、下载、反馈、选择按钮、Memory 入口、Review/Eval 面板、鉴权预览 blob；Task 15 已拆出 API client、composables 和 Composer/Timeline/ArtifactBoard/VersionStrip/ReviewPanel/MemoryPanel/EditPanel 组件，并补齐失败重试、候选对比和刷新后恢复最近 run |
 | 真实图片生成链路 | 已完成后端 E2E | V2 Image Agent 通过 Tool Registry 调用 Google Imagen 真实 provider，并由 Artifact Agent 写入 artifact 与 artifact_version；workflow `0.3.0` 已可接真实 Google Vision Review 或回退 mock，并经 Ranker 写回逐候选 `quality_scores/rank_score`；Google Imagen 后端 E2E 已通过，前端 `/workspace` 待本机服务和代理在线后冒烟 |
 
 ## 2. `IMAGE_AGENT_DEVELOPMENT_GUIDE.md` 全量对齐清单
@@ -33,9 +33,9 @@
 
 | 指南章节 | 要求 | 当前状态 | 已完成 | 未完成 / 风险 |
 | --- | --- | --- | --- | --- |
-| 4 推荐目标架构 | Runtime、Workflow、Memory、Tool、Artifact、Evolution 分层 | 部分完成 | 已新增 `agent_v2/domain/runtime/workflow/memory/tools/artifact/eval` 基础包 | Event、Security、Prompt 子包还未完整落地 |
-| 14 后端代码组织建议 | 后端按 runtime、workflow、agents、memory、tools、artifacts、eval 拆分 | 部分完成 | V2 已按新结构拆包；新增真实 Requirement/Prompt/Image/Artifact Agent；未继续扩展旧 `agent_svc` | `prompt/security/event` 子包未建；Refiner/Evolution Agent 未完成 |
-| 21.12 重写目录结构 | 新能力进入 `agent_v2` | 部分完成 | 当前新增后端代码进入 `agent_v2`、`agent_v2_dao`、`agent_v2_ctrl`；前端新增独立 V2 工作台 | 旧前端和旧接口仍保留，后续需逐步迁移主入口和历史能力 |
+| 4 推荐目标架构 | Runtime、Workflow、Memory、Tool、Artifact、Evolution 分层 | 已完成第一版 | 已新增 `agent_v2/domain/runtime/workflow/memory/tools/artifact/eval/security` 基础包，并完成主要 V2 主链路闭环 | Event 子包仍可后续按长连接事件流再拆 |
+| 14 后端代码组织建议 | 后端按 runtime、workflow、agents、memory、tools、artifacts、eval 拆分 | 已完成第一版 | V2 已按新结构拆包；Requirement/Prompt/Image/Artifact/Review/Ranker/Refiner/PosterRender/Evolution/Safety 已落地；旧 `agent_svc` 标记 deprecated | 真正原生 ImageEdit/Segmentation provider 后续可继续补 |
+| 21.12 重写目录结构 | 新能力进入 `agent_v2` | 已完成第一版 | 当前新增后端代码进入 `agent_v2`、`agent_v2_dao`、`agent_v2_ctrl`；前端默认入口迁移到 V2 Workspace，旧 Chat/API 保留兼容 | 旧链路可在确认历史会话迁移完成后再删除 |
 
 ### 2.2 多 Agent 协同
 
@@ -291,6 +291,7 @@ npm run build
 | 2026-05-28 | Task 13：Evolution / Eval / Prompt 版本治理 | 新增 `eval_cases`、`eval_runs` model、AutoMigrate 和 DAO；新增 `EvolutionService`，可聚合最近 reflection 失败原因 Top 5、从低分 action item 生成 prompt version draft，并支持 `draft -> review -> active -> archived` 状态流转，激活时会归档同 agent 旧 active 版本；新增 `/api/v2/evolution/summary`、prompt version draft/list/review/activate/archive 和 `/api/v2/eval/cases|runs` 基础 API；前端 `/workspace` 增加轻量 Evolution 面板。当前 eval run 先记录结果，不自动执行真实评测集。 | `go test ./model ./bootstrap ./internal/dao/agent_v2_dao ./internal/service/agent_v2/eval ./internal/service/agent_v2/app ./internal/controller/agent_v2_ctrl ./routers -count=1`、`npm run build` 通过 |
 | 2026-05-28 | Task 14：安全、存储和合规边界 | 新增 `agent_v2/security` 本地安全策略、静态 `SafetyProvider` 适配和 tool invocation 埋点；workflow 在 prompt 后执行生成前文本安全审查，在图片生成后执行图片安全审查，upload/edit 也会走安全检查；上传补齐扩展名/MIME/像素/大小校验；upload/generate/edit/render object key 增加随机不可预测路径段；LocalObjectStore 增加路径穿越防护；access log 跳过上传/二进制体并递归脱敏 token、API key、prompt/content/messages；外链分享不新增，继续保持鉴权 preview/download API 和静态 `/artifacts` 默认关闭。 | `go test ./internal/service/agent_v2/security ./internal/service/agent_v2/tools ./internal/service/agent_v2/agents ./internal/service/agent_v2/workflow ./internal/service/agent_v2/app ./internal/service/agent_v2/artifact ./internal/service/agent_svc ./internal/middleware ./internal/controller/agent_v2_ctrl ./routers -count=1` 通过 |
 | 2026-05-28 | Task 15：前端工作台组件化和体验补齐 | 新增 `frontend/src/api/agentV2.ts`、`artifacts.ts`、`memories.ts`；新增 `useAgentRun`、`useRunEvents`、`useArtifacts`、`useMemories`；拆出 `WorkspaceComposer`、`TimelinePanel`、`ArtifactBoard`、`VersionStrip`、`ReviewPanel`、`MemoryPanel`、`EditPanel`；工作台新增失败 run 重试入口、候选对比、empty/queued/running/waiting_user/failed/cancelled/completed 状态展示和 localStorage 最近 run 恢复；补长文本/长错误 overflow 约束。 | `npm run build` 通过 |
+| 2026-05-28 | Task 16：默认入口迁移、文档同步和旧代码收敛 | 前端根路径、登录成功、注册成功和设置页导航默认进入 `/workspace`；旧 `/chat` 保留为历史兼容入口；`internal/service/agent_svc.AgentService` 标记 deprecated，不再承接新图片 Agent 能力；旧 artifact preview/download 兼容保留，V2 默认走 artifact version 和鉴权 API；同步 README、前端 README、部署文档、Google 配置文档、V2 开发顺序和进度文档。 | `go test ./...`、`npm run build`、`git diff --check` 通过 |
 
 ## 9. Google 模型数据库配置
 

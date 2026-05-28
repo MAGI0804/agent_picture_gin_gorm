@@ -1,5 +1,14 @@
 # 使用 docker 部署
 
+## 图片 Agent V2 入口
+
+当前默认前端入口为 `/workspace`，旧 `/chat` 只作为历史会话和旧 artifact 兼容入口保留。生产部署时建议：
+
+- 前端访问 `http://<host>:5173/workspace` 或由网关将根路径转到 V2 工作台。
+- 后端继续暴露 `8501`，V2 API 位于 `/api/v2`。
+- 产物预览/下载默认走鉴权 API；`AIAgent.Storage.StaticEnabled` 保持 `false`，除非明确需要临时静态调试。
+- 队列 worker 需要随 API 服务一起部署，用于执行 `agent_v2:run` 异步任务。
+
 ```shell
 
 # 在项目根目录下执行以下命令生成 docker 镜像

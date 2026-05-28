@@ -70,10 +70,10 @@ async function login() {
     })
     setToken(data.token)
     setCurrentUser(data.user)
-    authHint.value = '登录成功，正在进入对话页...'
+    authHint.value = '登录成功，正在进入 V2 工作台...'
     const redirect = typeof router.currentRoute.value.query.redirect === 'string'
       ? router.currentRoute.value.query.redirect
-      : '/chat'
+      : '/workspace'
     await router.push(redirect)
   } catch (error) {
     authHint.value = error instanceof Error ? error.message : '登录失败，请稍后重试'

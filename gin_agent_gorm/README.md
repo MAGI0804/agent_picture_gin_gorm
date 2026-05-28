@@ -3,6 +3,18 @@
 
 此项目不论是自己学习还是直接做功能开发，都是一个不错的选择，项目中集成了很多开箱即用的功能，比如：日志、缓存、邮件、异步队列、定时任务、接口频率限流、JWT 认证、图片验证码、分页、配置文件、数据库操作等等。
 
+## 图片 AI Agent V2
+
+当前图片 Agent 默认入口已经迁移到前端 `/workspace`。V2 链路包含异步 Run、Task Ledger、Tool Invocation、Artifact Version、候选图排序、Review/OCR、自动 Refine、Memory、图片上传/编辑、文字分层渲染、Evolution/Eval、鉴权预览下载和安全审查。
+
+旧版 `/chat` 与 `/api` 下的旧 Agent 接口仍保留，用于历史会话和旧 artifact 兼容读取；`internal/service/agent_svc` 已标记为 deprecated，新图片 Agent 能力应继续进入 `internal/service/agent_v2`、`internal/controller/agent_v2_ctrl` 和 `/api/v2`。
+
+常用入口：
+
+- 前端 V2 工作台：`http://localhost:5173/workspace`
+- 旧版兼容对话页：`http://localhost:5173/chat`
+- 后端 API：`http://localhost:8501`
+
 ## 关于项目目录
 
 - bootstrap —— 包初始化

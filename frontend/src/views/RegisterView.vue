@@ -116,8 +116,8 @@ async function registerUsingEmail() {
     setToken(data.token)
     const user = await apiFetch<UserProfile>('/api/auth/me')
     setCurrentUser(user)
-    hint.value = '注册成功，正在进入对话页...'
-    await router.push('/chat')
+    hint.value = '注册成功，正在进入 V2 工作台...'
+    await router.push('/workspace')
   } catch (error) {
     hint.value = error instanceof Error ? error.message : '注册失败，请稍后重试'
   }

@@ -1,6 +1,6 @@
 # Google 模型三 Key 配置说明
 
-更新时间：2026-05-26
+更新时间：2026-05-28
 
 ## 目标
 
@@ -13,6 +13,8 @@ Google 模型按能力拆成 3 个独立 API Key：
 | 视觉理解 | `gemini-3.5-flash` | `GOOGLE_GEMINI_VISION_API_KEY` | 真实 Vision Review / 后续 OCR 增强 |
 
 这样某一个能力触发限流、欠费、Key 失效或风控时，不会直接影响其他能力。
+
+当前默认使用前端 `/workspace` 发起 V2 图片 Agent 任务；旧 `/chat` 仅保留为历史兼容入口。完成三 Key 配置后，在 `/workspace` 选择或自动使用对应文本、图片和 Vision 配置即可运行 V2 异步生成链路。
 
 参考 Google 官方文档：
 
