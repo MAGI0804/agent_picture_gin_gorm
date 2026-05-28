@@ -94,6 +94,7 @@ func TestImageGenerationWorkflowIncludesVisionReviewAfterArtifacts(t *testing.T)
 		"prompt_agent",
 		"image_generation_agent",
 		"artifact_agent",
+		"poster_render_agent",
 		"vision_review_agent",
 		"ranker_agent",
 		"refiner_agent",

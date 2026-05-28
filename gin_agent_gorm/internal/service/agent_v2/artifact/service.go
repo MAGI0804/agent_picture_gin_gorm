@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"time"
 
+	"gin-biz-web-api/internal/service/agent_svc"
 	"gin-biz-web-api/model"
 )
 
@@ -76,6 +79,25 @@ type CreateRefinedVersionInput struct {
 	ParentVersionID uint
 	AgentRunID      uint
 	Image           model.ArtifactVersion
+}
+
+// CreateRenderedArtifactInput stores a derived HTML/SVG render linked to a source artifact.
+type CreateRenderedArtifactInput struct {
+	UserID           uint
+	ConversationID   uint
+	AgentRunID       uint
+	ParentArtifactID uint
+	ParentVersionID  uint
+	ArtifactGroupID  string
+	Name             string
+	Kind             string
+	MimeType         string
+	Content          []byte
+	Operation        string
+	Prompt           string
+	ModelProvider    string
+	ModelName        string
+	SourceRefs       string
 }
 
 // NewService 创建产物服务实例。
@@ -259,6 +281,81 @@ func (svc *Service) CreateRefinedVersion(input CreateRefinedVersionInput) (model
 		return model.ArtifactVersion{}, err
 	}
 	return version, nil
+}
+
+// CreateRenderedArtifact records a text/layout render as a linked artifact with its own version.
+func (svc *Service) CreateRenderedArtifact(input CreateRenderedArtifactInput) (model.Artifact, model.ArtifactVersion, error) {
+	if input.UserID == 0 {
+		return model.Artifact{}, model.ArtifactVersion{}, errors.New("rendered artifact user_id is required")
+	}
+	if input.ConversationID == 0 {
+		return model.Artifact{}, model.ArtifactVersion{}, errors.New("rendered artifact conversation_id is required")
+	}
+	if len(input.Content) == 0 {
+		return model.Artifact{}, model.ArtifactVersion{}, errors.New("rendered artifact content is required")
+	}
+	name := agent_svc.SafeDownloadName(strings.TrimSpace(input.Name))
+	if name == "" || name == "." {
+		name = "poster-render.svg"
+	}
+	kind := strings.TrimSpace(input.Kind)
+	if kind == "" {
+		kind = "svg"
+	}
+	mimeType := strings.TrimSpace(input.MimeType)
+	if mimeType == "" {
+		mimeType = "image/svg+xml"
+	}
+	operation := strings.TrimSpace(input.Operation)
+	if operation == "" {
+		operation = "render_text"
+	}
+	runPart := "manual"
+	if input.AgentRunID > 0 {
+		runPart = fmt.Sprintf("run-%d", input.AgentRunID)
+	}
+	objectKey := path.Join(
+		fmt.Sprintf("user-%d", input.UserID),
+		fmt.Sprintf("conversation-%d", input.ConversationID),
+		runPart,
+		"rendered",
+		fmt.Sprintf("%d-%s", time.Now().UnixNano(), name),
+	)
+	stored, err := agent_svc.NewObjectStore().Save(objectKey, input.Content)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	return svc.CreateArtifactWithVersion(CreateArtifactWithVersionInput{
+		Artifact: model.Artifact{
+			UserID:           input.UserID,
+			ConversationID:   input.ConversationID,
+			AgentRunID:       input.AgentRunID,
+			Name:             name,
+			Kind:             kind,
+			MimeType:         mimeType,
+			ObjectKey:        stored.ObjectKey,
+			PreviewURL:       stored.PreviewURL,
+			SizeBytes:        stored.SizeBytes,
+			Hash:             stored.Hash,
+			ParentArtifactID: input.ParentArtifactID,
+			ArtifactGroupID:  input.ArtifactGroupID,
+			Visibility:       "private",
+			StoragePolicy:    "local_private",
+		},
+		Version: model.ArtifactVersion{
+			AgentRunID:      input.AgentRunID,
+			VersionNo:       1,
+			Operation:       operation,
+			Prompt:          input.Prompt,
+			ModelProvider:   input.ModelProvider,
+			ModelName:       input.ModelName,
+			SourceRefs:      input.SourceRefs,
+			ParentVersionID: input.ParentVersionID,
+			ObjectKey:       stored.ObjectKey,
+			PreviewURL:      stored.PreviewURL,
+			Hash:            stored.Hash,
+		},
+	})
 }
 
 // RecordReviewScores stores structured review output on the artifact version.

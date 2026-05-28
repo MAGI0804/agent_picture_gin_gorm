@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -115,6 +116,14 @@ type EditArtifactRequest struct {
 	ArtifactVersionID  uint   `json:"artifact_version_id" form:"artifact_version_id"`
 	Prompt             string `json:"prompt" form:"prompt" binding:"required"`
 	ImageModelConfigID uint   `json:"image_model_config_id" form:"image_model_config_id"`
+}
+
+// RenderTextRequest creates a text-layer SVG artifact from an existing image artifact.
+type RenderTextRequest struct {
+	ArtifactVersionID uint   `json:"artifact_version_id" form:"artifact_version_id"`
+	Title             string `json:"title" form:"title" binding:"required"`
+	Subtitle          string `json:"subtitle" form:"subtitle"`
+	Brand             string `json:"brand" form:"brand"`
 }
 
 // RunEvent is a normalized polling/SSE event assembled from steps, ledger, and tool invocations.
@@ -862,6 +871,62 @@ func (svc *Service) EditArtifact(ctx context.Context, userID uint, artifactID ui
 	return publicArtifactVersions([]model.ArtifactVersion{version})[0], nil
 }
 
+// RenderArtifactText creates an SVG text-layer artifact linked to an owned image artifact.
+func (svc *Service) RenderArtifactText(userID uint, artifactID uint, request RenderTextRequest) (model.Artifact, model.ArtifactVersion, error) {
+	title := strings.TrimSpace(request.Title)
+	if title == "" {
+		return model.Artifact{}, model.ArtifactVersion{}, errors.New("render title is required")
+	}
+	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	if !strings.EqualFold(artifact.Kind, "image") {
+		return model.Artifact{}, model.ArtifactVersion{}, errors.New("text rendering requires an image artifact")
+	}
+	versions, err := svc.artifacts.ListVersions(userID, artifactID)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	parent, err := selectParentVersion(versions, request.ArtifactVersionID)
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	layers := []renderTextLayer{{Text: title, Role: "title", Y: 170, Size: 58, Weight: "700"}}
+	if subtitle := strings.TrimSpace(request.Subtitle); subtitle != "" {
+		layers = append(layers, renderTextLayer{Text: subtitle, Role: "subtitle", Y: 245, Size: 28, Weight: "500"})
+	}
+	if brand := strings.TrimSpace(request.Brand); brand != "" {
+		layers = append(layers, renderTextLayer{Text: brand, Role: "brand", Y: 860, Size: 24, Weight: "600"})
+	}
+	sourceRefs, _ := json.Marshal(map[string]interface{}{
+		"background_artifact_id": artifact.ID,
+		"background_version_id":  parent.ID,
+		"text_layers":            layers,
+	})
+	rendered, version, err := svc.artifacts.CreateRenderedArtifact(artifactsvc.CreateRenderedArtifactInput{
+		UserID:           userID,
+		ConversationID:   artifact.ConversationID,
+		AgentRunID:       artifact.AgentRunID,
+		ParentArtifactID: artifact.ID,
+		ParentVersionID:  parent.ID,
+		ArtifactGroupID:  artifact.ArtifactGroupID,
+		Name:             "poster-text-layer.svg",
+		Kind:             "svg",
+		MimeType:         "image/svg+xml",
+		Content:          []byte(renderTextLayerSVG(artifact.PreviewURL, layers)),
+		Operation:        "render_text",
+		Prompt:           strings.Join(renderLayerTexts(layers), "\n"),
+		ModelProvider:    "layout_renderer",
+		ModelName:        "svg_text_layer_v1",
+		SourceRefs:       string(sourceRefs),
+	})
+	if err != nil {
+		return model.Artifact{}, model.ArtifactVersion{}, err
+	}
+	return publicArtifacts([]model.Artifact{rendered})[0], publicArtifactVersions([]model.ArtifactVersion{version})[0], nil
+}
+
 // DownloadArtifact resolves an owned artifact to a local file path.
 func (svc *Service) DownloadArtifact(userID uint, artifactID uint) (model.Artifact, string, error) {
 	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
@@ -1216,6 +1281,46 @@ func selectParentVersion(versions []model.ArtifactVersion, requestedID uint) (mo
 		return model.ArtifactVersion{}, errors.New("requested parent version was not found")
 	}
 	return versions[len(versions)-1], nil
+}
+
+type renderTextLayer struct {
+	Text   string `json:"text"`
+	Role   string `json:"role"`
+	Y      int    `json:"y"`
+	Size   int    `json:"size"`
+	Weight string `json:"weight"`
+}
+
+func renderTextLayerSVG(backgroundRef string, layers []renderTextLayer) string {
+	builder := strings.Builder{}
+	builder.WriteString(`<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1350" viewBox="0 0 1080 1350">`)
+	builder.WriteString(`<defs><linearGradient id="poster-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1f2933"/><stop offset="58%" stop-color="#526d7a"/><stop offset="100%" stop-color="#e9c46a"/></linearGradient></defs>`)
+	builder.WriteString(`<rect width="100%" height="100%" fill="url(#poster-bg)"/>`)
+	builder.WriteString(`<rect x="44" y="88" width="780" height="240" rx="18" fill="rgba(0,0,0,0.32)"/>`)
+	for _, layer := range layers {
+		builder.WriteString(fmt.Sprintf(
+			`<text x="78" y="%d" fill="#fffaf0" font-family="Arial, 'Microsoft YaHei', sans-serif" font-size="%d" font-weight="%s">%s</text>`,
+			layer.Y,
+			layer.Size,
+			html.EscapeString(layer.Weight),
+			html.EscapeString(layer.Text),
+		))
+	}
+	if strings.TrimSpace(backgroundRef) != "" {
+		builder.WriteString(fmt.Sprintf(`<text x="48" y="1310" fill="rgba(255,255,255,0.72)" font-family="Arial, sans-serif" font-size="18">source: %s</text>`, html.EscapeString(backgroundRef)))
+	}
+	builder.WriteString(`</svg>`)
+	return builder.String()
+}
+
+func renderLayerTexts(layers []renderTextLayer) []string {
+	values := make([]string, 0, len(layers))
+	for _, layer := range layers {
+		if strings.TrimSpace(layer.Text) != "" {
+			values = append(values, strings.TrimSpace(layer.Text))
+		}
+	}
+	return values
 }
 
 func memoryItemsFromModel(memories []model.ContextMemory) []domain.MemoryItem {

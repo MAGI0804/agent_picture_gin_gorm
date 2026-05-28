@@ -65,6 +65,7 @@ func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 			ModelProvider: options.ModelProvider,
 			ModelName:     options.ModelName,
 		}),
+		agents.NewPosterRenderAgent(options.ArtifactWriter),
 		reviewNode,
 		agents.NewRankerAgent(),
 		agents.NewRefinerAgent(options.Registry, options.ArtifactWriter, agents.RefinerAgentOptions{

@@ -568,7 +568,7 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		state.Prompts.Params = parseStringMap(result.Output["params"])
 	case "image_generation_agent":
 		state.GeneratedImages = parseGeneratedImages(result.Output["generated_images"])
-	case "artifact_agent", "refiner_agent":
+	case "artifact_agent", "poster_render_agent", "refiner_agent":
 		state.Artifacts = append(state.Artifacts, result.Artifacts...)
 	case "vision_review_agent", "ranker_agent":
 		if score, ok := result.Output["overall_score"].(float64); ok {

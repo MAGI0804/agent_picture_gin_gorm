@@ -303,6 +303,26 @@ func (ctrl *AgentV2Controller) EditArtifact(c *gin.Context) {
 	responses.New(c).ToResponse(gin.H{"version": version})
 }
 
+// RenderArtifactText creates a linked SVG text-layer artifact from an owned image artifact.
+func (ctrl *AgentV2Controller) RenderArtifactText(c *gin.Context) {
+	userID := auth.CurrentUserID(c)
+	artifactID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	var request app.RenderTextRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	artifact, version, err := app.NewService().RenderArtifactText(userID, artifactID, request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"artifact": artifact, "version": version})
+}
+
 // DownloadArtifact 下载当前用户有权访问的 V2 产物。
 func (ctrl *AgentV2Controller) DownloadArtifact(c *gin.Context) {
 	userID := auth.CurrentUserID(c)

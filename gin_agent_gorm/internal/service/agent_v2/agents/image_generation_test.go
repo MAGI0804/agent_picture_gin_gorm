@@ -50,6 +50,7 @@ func (provider *fakeTextProvider) GenerateText(
 type fakeArtifactWriter struct {
 	input    CreateCandidateGroupInput
 	versions []model.ArtifactVersion
+	render   artifactsvc.CreateRenderedArtifactInput
 }
 
 func (writer *fakeArtifactWriter) CreateCandidateGroup(
@@ -78,6 +79,26 @@ func (writer *fakeArtifactWriter) CreateRefinedVersion(input artifactsvc.CreateR
 	version.ArtifactID = input.ArtifactID
 	version.ParentVersionID = input.ParentVersionID
 	return version, nil
+}
+
+func (writer *fakeArtifactWriter) CreateRenderedArtifact(input artifactsvc.CreateRenderedArtifactInput) (model.Artifact, model.ArtifactVersion, error) {
+	writer.render = input
+	return model.Artifact{
+			BaseModel:        model.BaseModel{ID: 30},
+			UserID:           input.UserID,
+			ConversationID:   input.ConversationID,
+			AgentRunID:       input.AgentRunID,
+			Name:             input.Name,
+			Kind:             input.Kind,
+			MimeType:         input.MimeType,
+			PreviewURL:       "/api/v2/artifacts/30/preview",
+			ParentArtifactID: input.ParentArtifactID,
+		}, model.ArtifactVersion{
+			BaseModel:       model.BaseModel{ID: 31},
+			ArtifactID:      30,
+			ParentVersionID: input.ParentVersionID,
+			Operation:       input.Operation,
+		}, nil
 }
 
 func TestRequirementAgentUsesTextProviderStructuredJSON(t *testing.T) {

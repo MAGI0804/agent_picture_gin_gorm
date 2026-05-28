@@ -164,7 +164,7 @@
           }"
           @click="selectArtifact(artifact)"
         >
-          <img v-if="artifact.kind === 'image' && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
+          <img v-if="isPreviewableArtifact(artifact) && previewUrlFor(artifact)" :src="previewUrlFor(artifact)" :alt="artifact.name" />
           <span v-else>{{ artifact.kind }}</span>
           <strong>{{ artifact.name }}</strong>
           <small>{{ artifact.mime_type }}</small>
@@ -190,7 +190,7 @@
           </div>
         </div>
         <img
-          v-if="selectedArtifact.kind === 'image' && previewUrlFor(selectedArtifact)"
+          v-if="isPreviewableArtifact(selectedArtifact) && previewUrlFor(selectedArtifact)"
           :src="previewUrlFor(selectedArtifact)"
           :alt="selectedArtifact.name"
         />
@@ -227,6 +227,24 @@
         </label>
         <button type="button" :disabled="!canEditArtifact" @click="editSelectedArtifact">
           {{ editingArtifact ? '编辑中...' : '继续编辑' }}
+        </button>
+      </section>
+
+      <section v-if="selectedArtifact?.kind === 'image'" class="v2-edit-panel">
+        <label>
+          标题
+          <input v-model="renderTitle" type="text" placeholder="中文标题由渲染层排版" />
+        </label>
+        <label>
+          副标题
+          <input v-model="renderSubtitle" type="text" placeholder="可选副标题" />
+        </label>
+        <label>
+          品牌
+          <input v-model="renderBrand" type="text" placeholder="可选品牌文案" />
+        </label>
+        <button type="button" :disabled="!canRenderTextLayer" @click="renderTextLayer">
+          {{ renderingTextLayer ? '渲染中...' : '生成文字分层' }}
         </button>
       </section>
 
@@ -400,6 +418,10 @@ const uploadFile = ref<File | null>(null)
 const uploadingArtifact = ref(false)
 const editPrompt = ref('')
 const editingArtifact = ref(false)
+const renderTitle = ref('')
+const renderSubtitle = ref('')
+const renderBrand = ref('')
+const renderingTextLayer = ref(false)
 const feedbackType = ref('selected')
 const rating = ref(0)
 const feedbackComment = ref('')
@@ -447,6 +469,7 @@ const canResumeRun = computed(() => {
 })
 const canUploadArtifact = computed(() => Boolean(activeConversationId.value && uploadFile.value && !uploadingArtifact.value))
 const canEditArtifact = computed(() => Boolean(selectedArtifact.value && selectedVersionId.value && editPrompt.value.trim() && !editingArtifact.value))
+const canRenderTextLayer = computed(() => Boolean(selectedArtifact.value?.kind === 'image' && selectedVersionId.value && renderTitle.value.trim() && !renderingTextLayer.value))
 const selectedVersion = computed(() => versions.value.find(item => item.id === selectedVersionId.value) || null)
 const selectedQualityScores = computed(() => parseQualityScores(selectedVersion.value?.quality_scores))
 const rankedArtifacts = computed(() => {
@@ -727,6 +750,35 @@ async function editSelectedArtifact() {
   }
 }
 
+async function renderTextLayer() {
+  if (!selectedArtifact.value || !selectedVersionId.value || renderingTextLayer.value) return
+  const title = renderTitle.value.trim()
+  if (!title) return
+  renderingTextLayer.value = true
+  errorMessage.value = ''
+  try {
+    const data = await apiFetch<{ artifact: Artifact; version: ArtifactVersion }>(`/api/v2/artifacts/${selectedArtifact.value.id}/render-text`, {
+      method: 'POST',
+      body: JSON.stringify({
+        artifact_version_id: selectedVersionId.value,
+        title,
+        subtitle: renderSubtitle.value.trim(),
+        brand: renderBrand.value.trim()
+      })
+    })
+    renderTitle.value = ''
+    renderSubtitle.value = ''
+    renderBrand.value = ''
+    await loadArtifacts()
+    const current = artifacts.value.find(item => item.id === data.artifact.id) || data.artifact
+    await selectArtifact(current)
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '文字分层渲染失败'
+  } finally {
+    renderingTextLayer.value = false
+  }
+}
+
 async function markSelected() {
   if (!selectedArtifact.value || selectingArtifact.value) return
   selectingArtifact.value = true
@@ -940,6 +992,10 @@ function formatRankScore(score?: number) {
 
 function isRecommendedArtifact(artifact: Artifact) {
   return artifact.id === recommendedArtifactId.value
+}
+
+function isPreviewableArtifact(artifact: Artifact) {
+  return artifact.kind === 'image' || artifact.kind === 'svg'
 }
 
 function formatConfidence(confidence?: number) {

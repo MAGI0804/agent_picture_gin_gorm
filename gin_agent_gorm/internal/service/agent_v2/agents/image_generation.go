@@ -20,6 +20,7 @@ type CreateCandidateGroupInput = artifactsvc.CreateCandidateGroupInput
 type ArtifactWriter interface {
 	CreateCandidateGroup(input artifactsvc.CreateCandidateGroupInput) ([]model.Artifact, []model.ArtifactVersion, error)
 	CreateRefinedVersion(input artifactsvc.CreateRefinedVersionInput) (model.ArtifactVersion, error)
+	CreateRenderedArtifact(input artifactsvc.CreateRenderedArtifactInput) (model.Artifact, model.ArtifactVersion, error)
 }
 
 // IntentRouterAgent classifies V2 requests into the first supported workflow.

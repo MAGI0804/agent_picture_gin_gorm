@@ -30,6 +30,7 @@ func registerAgentV2Routes(api *gin.RouterGroup) {
 		group.GET("/artifacts/:id/preview", ctrl.PreviewArtifact)
 		group.GET("/artifacts/:id/download", ctrl.DownloadArtifact)
 		group.POST("/artifacts/:id/edit", ctrl.EditArtifact)
+		group.POST("/artifacts/:id/render-text", ctrl.RenderArtifactText)
 		group.POST("/artifacts/:id/feedback", ctrl.RecordArtifactFeedback)
 		group.POST("/artifacts/:id/select", ctrl.SelectArtifact)
 	}
