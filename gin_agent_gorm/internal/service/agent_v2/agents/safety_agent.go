@@ -68,11 +68,11 @@ func (agent *SafetyAgent) checkText(ctx context.Context, state domain.RunState, 
 		return domain.StepResult{}, err
 	}
 	if !result.Allowed {
-		return domain.StepResult{}, fmt.Errorf("text safety check rejected content: %s", result.Reason)
+		return domain.StepResult{}, fmt.Errorf("文本安全检查拒绝内容: %s", result.Reason)
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: "text safety check passed",
+		Summary: "文本安全检查已通过",
 		Output: map[string]interface{}{
 			"allowed": true,
 			"phase":   string(SafetyPhaseText),
@@ -82,7 +82,7 @@ func (agent *SafetyAgent) checkText(ctx context.Context, state domain.RunState, 
 
 func (agent *SafetyAgent) checkImages(ctx context.Context, state domain.RunState, tool tools.Tool) (domain.StepResult, error) {
 	if len(state.GeneratedImages) == 0 {
-		return domain.StepResult{}, errors.New("generated images are required for image safety check")
+		return domain.StepResult{}, errors.New("图片安全检查需要已生成的图片")
 	}
 	for _, image := range state.GeneratedImages {
 		imageRef := strings.TrimSpace(image.ObjectKey)
@@ -99,12 +99,12 @@ func (agent *SafetyAgent) checkImages(ctx context.Context, state domain.RunState
 			return domain.StepResult{}, err
 		}
 		if !result.Allowed {
-			return domain.StepResult{}, fmt.Errorf("image safety check rejected content: %s", result.Reason)
+			return domain.StepResult{}, fmt.Errorf("图片安全检查拒绝内容: %s", result.Reason)
 		}
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: fmt.Sprintf("image safety check passed for %d candidate(s)", len(state.GeneratedImages)),
+		Summary: fmt.Sprintf("已通过 %d 张候选图片的安全检查", len(state.GeneratedImages)),
 		Output: map[string]interface{}{
 			"allowed":     true,
 			"phase":       string(SafetyPhaseImage),

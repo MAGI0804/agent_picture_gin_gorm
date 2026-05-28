@@ -1247,7 +1247,7 @@ func mergeClarificationAnswer(state domain.RunState, answer string, createdAt in
 }
 
 func appendClarificationToRequest(userRequest string, questions []string, answer string) string {
-	parts := []string{strings.TrimSpace(userRequest), "Clarification:"}
+	parts := []string{strings.TrimSpace(userRequest), "补充信息："}
 	for _, question := range questions {
 		question = strings.TrimSpace(question)
 		if question != "" {
@@ -1256,7 +1256,7 @@ func appendClarificationToRequest(userRequest string, questions []string, answer
 	}
 	answer = strings.TrimSpace(answer)
 	if answer != "" {
-		parts = append(parts, "Answer: "+answer)
+		parts = append(parts, "回答："+answer)
 	}
 	return strings.Join(nonEmptyStrings(parts), "\n")
 }

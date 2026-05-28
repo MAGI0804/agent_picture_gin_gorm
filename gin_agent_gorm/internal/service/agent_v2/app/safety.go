@@ -84,7 +84,7 @@ func (svc *Service) checkTextSafety(ctx context.Context, userID uint, prompt str
 		return err
 	}
 	if !result.Allowed {
-		return fmt.Errorf("text safety check rejected content: %s", result.Reason)
+		return fmt.Errorf("文本安全检查拒绝内容: %s", result.Reason)
 	}
 	return nil
 }
@@ -106,7 +106,7 @@ func (svc *Service) checkImageSafety(ctx context.Context, userID uint, imageRef 
 		return err
 	}
 	if !result.Allowed {
-		return fmt.Errorf("image safety check rejected content: %s", result.Reason)
+		return fmt.Errorf("图片安全检查拒绝内容: %s", result.Reason)
 	}
 	return nil
 }

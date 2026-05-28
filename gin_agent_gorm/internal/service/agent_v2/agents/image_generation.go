@@ -40,7 +40,7 @@ func (agent *IntentRouterAgent) Run(ctx context.Context, state domain.RunState) 
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: "classified request as image_generation",
+		Summary: "已识别为图片生成任务",
 		Output: map[string]interface{}{
 			"task_type": "image_generation",
 			"intent":    "image_generation",
@@ -128,7 +128,7 @@ func (agent *MemoryAgent) Run(ctx context.Context, state domain.RunState) (domai
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: fmt.Sprintf("loaded %d memory items", len(state.MemoryContext)),
+		Summary: fmt.Sprintf("已加载 %d 条记忆", len(state.MemoryContext)),
 		Output: map[string]interface{}{
 			"memory_count": len(state.MemoryContext),
 		},
@@ -256,7 +256,7 @@ func promptStepResult(bundle domain.PromptBundle, issues []string) domain.StepRe
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: "prepared structured image prompt bundle",
+		Summary: "已生成结构化图片提示词",
 		Output:  output,
 	}
 }
@@ -349,7 +349,7 @@ func (agent *ImageGenerationAgent) Run(ctx context.Context, state domain.RunStat
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: fmt.Sprintf("generated %d image candidate(s)", len(images)),
+		Summary: fmt.Sprintf("已生成 %d 张候选图片", len(images)),
 		Output: map[string]interface{}{
 			"generated_images": images,
 		},
@@ -447,7 +447,7 @@ func (agent *ArtifactAgent) Run(ctx context.Context, state domain.RunState) (dom
 	}
 	return domain.StepResult{
 		Status:    domain.StepStatusCompleted,
-		Summary:   fmt.Sprintf("persisted %d artifact candidate(s)", len(refs)),
+		Summary:   fmt.Sprintf("已保存 %d 个候选产物", len(refs)),
 		Output:    map[string]interface{}{"artifact_count": len(refs)},
 		Artifacts: refs,
 	}, nil
@@ -521,7 +521,7 @@ func requirementStepResult(requirements domain.ImageRequirements, issues []strin
 	}
 	return domain.StepResult{
 		Status:  domain.StepStatusCompleted,
-		Summary: "extracted structured image requirements",
+		Summary: "已提取结构化图片需求",
 		Output:  output,
 	}
 }
@@ -836,8 +836,8 @@ func inferClarificationQuestions(text string) []string {
 
 func defaultClarificationQuestions() []string {
 	return []string{
-		"What subject should the image feature?",
-		"What style, use case, or layout should it target?",
+		"图片的主体应该是什么？",
+		"希望采用什么风格、用途或画面比例？",
 	}
 }
 

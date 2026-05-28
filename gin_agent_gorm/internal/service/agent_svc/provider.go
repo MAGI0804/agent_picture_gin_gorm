@@ -313,11 +313,13 @@ func (provider *HTTPProvider) chatOpenAICompatible(baseURL string, request ChatR
 	}
 
 	payload := map[string]interface{}{
-		"model":            modelName,
-		"messages":         payloadMessages,
-		"temperature":      parseTemperature(provider.config.Temperature),
-		"stream":           request.Stream,
-		"return_reasoning": request.ReturnReasoning,
+		"model":       modelName,
+		"messages":    payloadMessages,
+		"temperature": parseTemperature(provider.config.Temperature),
+		"stream":      request.Stream,
+	}
+	if request.ReturnReasoning && supportsOpenAICompatibleReturnReasoning(provider.config, baseURL) {
+		payload["return_reasoning"] = true
 	}
 
 	endpoint := joinBaseURL(baseURL, "chat/completions")
@@ -461,6 +463,17 @@ func isDeepseekChatProvider(providerName string, baseURL string) bool {
 	}
 	lowerBaseURL := strings.ToLower(baseURL)
 	return !strings.Contains(lowerBaseURL, "anthropic")
+}
+
+func supportsOpenAICompatibleReturnReasoning(config model.UserModelConfig, baseURL string) bool {
+	providerName := strings.ToLower(strings.TrimSpace(config.Provider))
+	lowerBaseURL := strings.ToLower(strings.TrimSpace(baseURL))
+	if strings.Contains(providerName, "google") ||
+		strings.Contains(lowerBaseURL, "generativelanguage.googleapis.com") ||
+		strings.Contains(lowerBaseURL, "ai.google.dev") {
+		return false
+	}
+	return runtimeConfigBool(config, "return_reasoning", "returnReasoning")
 }
 
 func normalizeChatRole(role string) string {
@@ -915,8 +928,8 @@ func runtimeConfigInt(config model.UserModelConfig, key string) int {
 	return parsed
 }
 
-func runtimeConfigBool(config model.UserModelConfig, key string) bool {
-	switch strings.ToLower(runtimeConfigString(config, key)) {
+func runtimeConfigBool(config model.UserModelConfig, keys ...string) bool {
+	switch strings.ToLower(runtimeConfigString(config, keys...)) {
 	case "true", "1", "yes", "y":
 		return true
 	default:

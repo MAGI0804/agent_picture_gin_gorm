@@ -24,17 +24,17 @@ func MockImageGenerationWorkflow() Workflow {
 	return Sequential(
 		"image_generation_v2",
 		"0.1.0",
-		agents.NewMockAgent("intent_router", "classified request as image_generation", map[string]interface{}{
+		agents.NewMockAgent("intent_router", "已识别为图片生成任务", map[string]interface{}{
 			"task_type": "image_generation",
 			"intent":    "mock_image_generation",
 		}),
-		agents.NewMockAgent("requirement_agent", "extracted first-pass image requirements", map[string]interface{}{
+		agents.NewMockAgent("requirement_agent", "已提取首版图片需求", map[string]interface{}{
 			"need_clarification": false,
 		}),
-		agents.NewMockAgent("memory_agent", "loaded placeholder memory context", map[string]interface{}{
+		agents.NewMockAgent("memory_agent", "已加载占位记忆上下文", map[string]interface{}{
 			"memory_count": 0,
 		}),
-		agents.NewMockAgent("prompt_agent", "prepared placeholder prompt bundle", map[string]interface{}{
+		agents.NewMockAgent("prompt_agent", "已生成占位提示词包", map[string]interface{}{
 			"positive_prompt": "mock prompt for first-day v2 runtime skeleton",
 		}),
 	)
