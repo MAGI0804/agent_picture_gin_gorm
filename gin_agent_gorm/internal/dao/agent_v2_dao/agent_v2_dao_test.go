@@ -59,8 +59,17 @@ type toolDAOContract interface {
 }
 
 type evalDAOContract interface {
+	ListReflections(agentName string, limit int) ([]model.AgentReflection, error)
 	CreatePromptVersion(version *model.AgentPromptVersion) error
+	ListPromptVersions(agentName string, limit int) ([]model.AgentPromptVersion, error)
+	FindPromptVersion(versionID uint) (model.AgentPromptVersion, error)
+	UpdatePromptVersion(versionID uint, attrs map[string]interface{}) error
+	ArchiveActivePromptVersions(agentName string, exceptID uint) error
 	CreateReflection(reflection *model.AgentReflection) error
+	CreateEvalCase(evalCase *model.EvalCase) error
+	ListEvalCases(agentName string, limit int) ([]model.EvalCase, error)
+	CreateEvalRun(run *model.EvalRun) error
+	ListEvalRuns(agentName string, limit int) ([]model.EvalRun, error)
 }
 
 var (

@@ -109,6 +109,46 @@ export interface ContextMemory {
   updated_at: number
 }
 
+export interface EvolutionSummaryItem {
+  failure_type: string
+  count: number
+  action_item: string
+}
+
+export interface AgentPromptVersion {
+  id: number
+  agent_name: string
+  version: string
+  prompt_template: string
+  changelog: string
+  status: string
+  metrics: string
+  created_at: number
+  updated_at: number
+}
+
+export interface EvalCase {
+  id: number
+  agent_name: string
+  name: string
+  input_json: string
+  expected_json: string
+  tags_json: string
+  status: string
+  weight: number
+}
+
+export interface EvalRun {
+  id: number
+  eval_case_id: number
+  prompt_version_id: number
+  agent_name: string
+  status: string
+  score: number
+  metrics_json: string
+  error_message: string
+}
+
 export interface GlobalModelConfig {
   id: number
   model_name: string

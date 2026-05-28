@@ -20,6 +20,10 @@ func TestAIAgentAutoMigrateModelsIncludesV2FirstRoundTables(t *testing.T) {
 		reflect.TypeOf(&model.TaskLedgerItem{}),
 		reflect.TypeOf(&model.ToolInvocation{}),
 		reflect.TypeOf(&model.MemoryEvent{}),
+		reflect.TypeOf(&model.AgentPromptVersion{}),
+		reflect.TypeOf(&model.AgentReflection{}),
+		reflect.TypeOf(&model.EvalCase{}),
+		reflect.TypeOf(&model.EvalRun{}),
 	}
 
 	for _, requiredType := range required {

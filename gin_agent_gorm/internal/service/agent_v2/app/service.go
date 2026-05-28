@@ -25,6 +25,7 @@ import (
 	"gin-biz-web-api/internal/service/agent_svc"
 	artifactsvc "gin-biz-web-api/internal/service/agent_v2/artifact"
 	"gin-biz-web-api/internal/service/agent_v2/domain"
+	evalsvc "gin-biz-web-api/internal/service/agent_v2/eval"
 	memorysvc "gin-biz-web-api/internal/service/agent_v2/memory"
 	"gin-biz-web-api/internal/service/agent_v2/runtime"
 	"gin-biz-web-api/internal/service/agent_v2/tools"
@@ -50,6 +51,7 @@ type Service struct {
 	executor  *runtime.Executor
 	artifacts *artifactsvc.Service
 	memories  *memorysvc.Service
+	evolution *evalsvc.EvolutionService
 	runQueue  RunQueue
 }
 
@@ -126,6 +128,35 @@ type RenderTextRequest struct {
 	Brand             string `json:"brand" form:"brand"`
 }
 
+type EvolutionQueryRequest struct {
+	AgentName string `json:"agent_name" form:"agent_name"`
+	Limit     int    `json:"limit" form:"limit"`
+}
+
+type DraftPromptVersionRequest struct {
+	AgentName string `json:"agent_name" form:"agent_name" binding:"required"`
+	Limit     int    `json:"limit" form:"limit"`
+}
+
+type EvalCaseRequest struct {
+	AgentName    string  `json:"agent_name" form:"agent_name" binding:"required"`
+	Name         string  `json:"name" form:"name" binding:"required"`
+	InputJSON    string  `json:"input_json" form:"input_json" binding:"required"`
+	ExpectedJSON string  `json:"expected_json" form:"expected_json"`
+	TagsJSON     string  `json:"tags_json" form:"tags_json"`
+	Weight       float64 `json:"weight" form:"weight"`
+}
+
+type EvalRunRequest struct {
+	EvalCaseID      uint    `json:"eval_case_id" form:"eval_case_id" binding:"required"`
+	PromptVersionID uint    `json:"prompt_version_id" form:"prompt_version_id"`
+	AgentName       string  `json:"agent_name" form:"agent_name" binding:"required"`
+	Status          string  `json:"status" form:"status"`
+	Score           float64 `json:"score" form:"score"`
+	MetricsJSON     string  `json:"metrics_json" form:"metrics_json"`
+	ErrorMessage    string  `json:"error_message" form:"error_message"`
+}
+
 // RunEvent is a normalized polling/SSE event assembled from steps, ledger, and tool invocations.
 type RunEvent struct {
 	Cursor         int                   `json:"cursor"`
@@ -159,6 +190,7 @@ func newService(runQueue RunQueue) *Service {
 		executor:  runtime.NewExecutor(dao),
 		artifacts: artifactsvc.NewService(dao),
 		memories:  memorysvc.NewService(dao),
+		evolution: evalsvc.NewEvolutionService(dao),
 		runQueue:  runQueue,
 	}
 }
@@ -690,6 +722,61 @@ func (svc *Service) PromoteMemoryProposal(
 }
 
 // SelectArtifact 选择当前用户有权访问的候选产物。
+func (svc *Service) EvolutionSummary(request EvolutionQueryRequest) ([]evalsvc.FailureSummary, error) {
+	return svc.evolution.FailureSummary(request.AgentName, request.Limit)
+}
+
+func (svc *Service) DraftPromptVersion(request DraftPromptVersionRequest) (model.AgentPromptVersion, error) {
+	return svc.evolution.DraftPromptVersion(evalsvc.DraftPromptInput{AgentName: request.AgentName, Limit: request.Limit})
+}
+
+func (svc *Service) ListPromptVersions(request EvolutionQueryRequest) ([]model.AgentPromptVersion, error) {
+	return svc.evolution.ListPromptVersions(request.AgentName, request.Limit)
+}
+
+func (svc *Service) MovePromptVersionToReview(versionID uint) (model.AgentPromptVersion, error) {
+	return svc.evolution.MovePromptVersionToReview(versionID)
+}
+
+func (svc *Service) ActivatePromptVersion(versionID uint) (model.AgentPromptVersion, error) {
+	return svc.evolution.ActivatePromptVersion(versionID)
+}
+
+func (svc *Service) ArchivePromptVersion(versionID uint) (model.AgentPromptVersion, error) {
+	return svc.evolution.ArchivePromptVersion(versionID)
+}
+
+func (svc *Service) CreateEvalCase(request EvalCaseRequest) (model.EvalCase, error) {
+	return svc.evolution.CreateEvalCase(evalsvc.EvalCaseInput{
+		AgentName:    request.AgentName,
+		Name:         request.Name,
+		InputJSON:    request.InputJSON,
+		ExpectedJSON: request.ExpectedJSON,
+		TagsJSON:     request.TagsJSON,
+		Weight:       request.Weight,
+	})
+}
+
+func (svc *Service) ListEvalCases(request EvolutionQueryRequest) ([]model.EvalCase, error) {
+	return svc.evolution.ListEvalCases(request.AgentName, request.Limit)
+}
+
+func (svc *Service) CreateEvalRun(request EvalRunRequest) (model.EvalRun, error) {
+	return svc.evolution.CreateEvalRun(evalsvc.EvalRunInput{
+		EvalCaseID:      request.EvalCaseID,
+		PromptVersionID: request.PromptVersionID,
+		AgentName:       request.AgentName,
+		Status:          request.Status,
+		Score:           request.Score,
+		MetricsJSON:     request.MetricsJSON,
+		ErrorMessage:    request.ErrorMessage,
+	})
+}
+
+func (svc *Service) ListEvalRuns(request EvolutionQueryRequest) ([]model.EvalRun, error) {
+	return svc.evolution.ListEvalRuns(request.AgentName, request.Limit)
+}
+
 func (svc *Service) SelectArtifact(userID uint, artifactID uint, request SelectArtifactRequest) error {
 	artifact, err := svc.artifacts.AuthorizeDownload(userID, artifactID)
 	if err != nil {

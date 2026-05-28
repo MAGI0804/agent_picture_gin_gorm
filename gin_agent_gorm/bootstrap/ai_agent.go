@@ -36,6 +36,8 @@ func aiAgentAutoMigrateModels() []interface{} {
 		&model.MemoryEvent{},
 		&model.AgentPromptVersion{},
 		&model.AgentReflection{},
+		&model.EvalCase{},
+		&model.EvalRun{},
 		&model.ModelConfig{},
 		&model.UserModelConfig{},
 		&model.UserModelPermission{},

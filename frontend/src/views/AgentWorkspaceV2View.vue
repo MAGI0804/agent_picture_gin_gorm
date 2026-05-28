@@ -321,6 +321,49 @@
       <section class="v2-memory-panel">
         <header>
           <div>
+            <strong>Evolution</strong>
+            <span>{{ promptVersions.length }} versions</span>
+          </div>
+          <button type="button" :disabled="evolutionLoading" @click="loadEvolution">刷新</button>
+        </header>
+        <label>
+          Agent
+          <select v-model="evolutionAgent" :disabled="evolutionLoading" @change="loadEvolution">
+            <option value="prompt_agent">prompt_agent</option>
+            <option value="vision_review_agent">vision_review_agent</option>
+            <option value="ranker_agent">ranker_agent</option>
+            <option value="poster_render_agent">poster_render_agent</option>
+          </select>
+        </label>
+        <button type="button" :disabled="evolutionLoading" @click="draftPromptVersion">
+          {{ evolutionLoading ? '处理中...' : '生成 Prompt Draft' }}
+        </button>
+        <ul v-if="evolutionSummary.length" class="v2-memory-list">
+          <li v-for="item in evolutionSummary" :key="item.failure_type">
+            <div>
+              <strong>{{ item.failure_type }} · {{ item.count }}</strong>
+              <p>{{ item.action_item }}</p>
+            </div>
+          </li>
+        </ul>
+        <ul v-if="promptVersions.length" class="v2-memory-list">
+          <li v-for="version in promptVersions" :key="version.id">
+            <div>
+              <strong>{{ version.agent_name }} · {{ version.version }}</strong>
+              <p>{{ version.status }}</p>
+            </div>
+            <div class="v2-memory-actions">
+              <button v-if="version.status === 'draft'" type="button" @click="reviewPromptVersion(version.id)">Review</button>
+              <button v-if="version.status === 'review' || version.status === 'archived'" type="button" @click="activatePromptVersion(version.id)">Active</button>
+              <button v-if="version.status !== 'archived'" type="button" @click="archivePromptVersion(version.id)">Archive</button>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="v2-memory-panel">
+        <header>
+          <div>
             <strong>Memory</strong>
             <span>{{ memories.length }} 条</span>
           </div>
@@ -386,11 +429,13 @@ import { apiFetch, downloadV2Artifact, fetchV2ArtifactPreviewURL } from '../api'
 import type {
   AgentRun,
   AgentStep,
+  AgentPromptVersion,
   AgentV2RunResponse,
   Artifact,
   ArtifactVersion,
   Conversation,
   ContextMemory,
+  EvolutionSummaryItem,
   ModelSelection,
   TaskLedgerItem,
   ToolInvocation
@@ -433,6 +478,10 @@ const memoryNamespace = ref('')
 const memoryStatusFilter = ref('')
 const memoryLoading = ref(false)
 const promotingMemoryId = ref(0)
+const evolutionAgent = ref('prompt_agent')
+const evolutionSummary = ref<EvolutionSummaryItem[]>([])
+const promptVersions = ref<AgentPromptVersion[]>([])
+const evolutionLoading = ref(false)
 const runPollTimer = ref<ReturnType<typeof window.setInterval> | null>(null)
 const clarificationAnswer = ref('')
 const resumingRun = ref(false)
@@ -559,7 +608,7 @@ async function openConversation(id: number) {
   selectedArtifact.value = null
   versions.value = []
   clarificationAnswer.value = ''
-  await Promise.all([loadArtifacts(), loadMemories()])
+  await Promise.all([loadArtifacts(), loadMemories(), loadEvolution()])
 }
 
 async function runAgent() {
@@ -840,6 +889,62 @@ async function loadMemories() {
     errorMessage.value = error instanceof Error ? error.message : '记忆加载失败'
   } finally {
     memoryLoading.value = false
+  }
+}
+
+async function loadEvolution() {
+  evolutionLoading.value = true
+  try {
+    const params = new URLSearchParams({ agent_name: evolutionAgent.value, limit: '20' })
+    const [summaryData, versionsData] = await Promise.all([
+      apiFetch<{ summary: EvolutionSummaryItem[] }>(`/api/v2/evolution/summary?${params.toString()}`),
+      apiFetch<{ prompt_versions: AgentPromptVersion[] }>(`/api/v2/evolution/prompt-versions?${params.toString()}`)
+    ])
+    evolutionSummary.value = summaryData.summary || []
+    promptVersions.value = versionsData.prompt_versions || []
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '演进数据加载失败'
+  } finally {
+    evolutionLoading.value = false
+  }
+}
+
+async function draftPromptVersion() {
+  if (evolutionLoading.value) return
+  evolutionLoading.value = true
+  try {
+    await apiFetch<{ prompt_version: AgentPromptVersion }>('/api/v2/evolution/prompt-versions/draft', {
+      method: 'POST',
+      body: JSON.stringify({ agent_name: evolutionAgent.value, limit: 20 })
+    })
+    await loadEvolution()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Prompt draft 生成失败'
+  } finally {
+    evolutionLoading.value = false
+  }
+}
+
+async function reviewPromptVersion(id: number) {
+  await updatePromptVersionLifecycle(id, 'review')
+}
+
+async function activatePromptVersion(id: number) {
+  await updatePromptVersionLifecycle(id, 'activate')
+}
+
+async function archivePromptVersion(id: number) {
+  await updatePromptVersionLifecycle(id, 'archive')
+}
+
+async function updatePromptVersionLifecycle(id: number, action: string) {
+  try {
+    await apiFetch<{ prompt_version: AgentPromptVersion }>(`/api/v2/evolution/prompt-versions/${id}/${action}`, {
+      method: 'POST'
+    })
+    await loadEvolution()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : 'Prompt version 状态更新失败'
   }
 }
 

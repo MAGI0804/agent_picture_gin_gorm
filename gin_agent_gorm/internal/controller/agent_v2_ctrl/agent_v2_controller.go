@@ -203,6 +203,116 @@ func (ctrl *AgentV2Controller) PromoteMemoryProposal(c *gin.Context) {
 	responses.New(c).ToResponse(gin.H{"memory": memory, "promoted": promoted})
 }
 
+func (ctrl *AgentV2Controller) EvolutionSummary(c *gin.Context) {
+	var request app.EvolutionQueryRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	summary, err := app.NewService().EvolutionSummary(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"summary": summary})
+}
+
+func (ctrl *AgentV2Controller) DraftPromptVersion(c *gin.Context) {
+	var request app.DraftPromptVersionRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	version, err := app.NewService().DraftPromptVersion(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"prompt_version": version})
+}
+
+func (ctrl *AgentV2Controller) ListPromptVersions(c *gin.Context) {
+	var request app.EvolutionQueryRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	versions, err := app.NewService().ListPromptVersions(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"prompt_versions": versions})
+}
+
+func (ctrl *AgentV2Controller) MovePromptVersionToReview(c *gin.Context) {
+	ctrl.updatePromptVersionStatus(c, "review")
+}
+
+func (ctrl *AgentV2Controller) ActivatePromptVersion(c *gin.Context) {
+	ctrl.updatePromptVersionStatus(c, "activate")
+}
+
+func (ctrl *AgentV2Controller) ArchivePromptVersion(c *gin.Context) {
+	ctrl.updatePromptVersionStatus(c, "archive")
+}
+
+func (ctrl *AgentV2Controller) CreateEvalCase(c *gin.Context) {
+	var request app.EvalCaseRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	evalCase, err := app.NewService().CreateEvalCase(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"eval_case": evalCase})
+}
+
+func (ctrl *AgentV2Controller) ListEvalCases(c *gin.Context) {
+	var request app.EvolutionQueryRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	cases, err := app.NewService().ListEvalCases(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"eval_cases": cases})
+}
+
+func (ctrl *AgentV2Controller) CreateEvalRun(c *gin.Context) {
+	var request app.EvalRunRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	run, err := app.NewService().CreateEvalRun(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"eval_run": run})
+}
+
+func (ctrl *AgentV2Controller) ListEvalRuns(c *gin.Context) {
+	var request app.EvolutionQueryRequest
+	if err := c.ShouldBind(&request); err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), "request params error")
+		return
+	}
+	runs, err := app.NewService().ListEvalRuns(request)
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"eval_runs": runs})
+}
+
 // SelectArtifact 选择一个候选产物。
 func (ctrl *AgentV2Controller) SelectArtifact(c *gin.Context) {
 	userID := auth.CurrentUserID(c)
@@ -383,6 +493,33 @@ func (ctrl *AgentV2Controller) parseID(c *gin.Context, key string) (uint, bool) 
 		return 0, false
 	}
 	return uint(id), true
+}
+
+func (ctrl *AgentV2Controller) updatePromptVersionStatus(c *gin.Context, action string) {
+	versionID, ok := ctrl.parseID(c, "id")
+	if !ok {
+		return
+	}
+	service := app.NewService()
+	var (
+		version interface{}
+		err     error
+	)
+	switch action {
+	case "review":
+		version, err = service.MovePromptVersionToReview(versionID)
+	case "activate":
+		version, err = service.ActivatePromptVersion(versionID)
+	case "archive":
+		version, err = service.ArchivePromptVersion(versionID)
+	default:
+		err = fmt.Errorf("unsupported prompt version action %q", action)
+	}
+	if err != nil {
+		responses.New(c).ToErrorResponse(errcode.BadRequest.WithDetails(err.Error()), err.Error())
+		return
+	}
+	responses.New(c).ToResponse(gin.H{"prompt_version": version})
 }
 
 // ResumeRun submits a clarification answer and requeues the same Agent V2 run.

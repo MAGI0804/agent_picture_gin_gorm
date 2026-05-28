@@ -123,6 +123,34 @@ func TestAgentV2FirstRoundModelFields(t *testing.T) {
 				"AfterJSON",
 			},
 		},
+		{
+			name:      "eval case exists",
+			modelType: EvalCase{},
+			fieldNames: []string{
+				"AgentName",
+				"Name",
+				"InputJSON",
+				"ExpectedJSON",
+				"TagsJSON",
+				"Status",
+				"Weight",
+			},
+		},
+		{
+			name:      "eval run exists",
+			modelType: EvalRun{},
+			fieldNames: []string{
+				"EvalCaseID",
+				"PromptVersionID",
+				"AgentName",
+				"Status",
+				"Score",
+				"MetricsJSON",
+				"ErrorMessage",
+				"StartedAt",
+				"CompletedAt",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -145,6 +173,8 @@ func TestAgentV2FirstRoundTableNames(t *testing.T) {
 		{name: TaskLedgerItem{}.TableName(), tableName: "task_ledger_items"},
 		{name: ToolInvocation{}.TableName(), tableName: "tool_invocations"},
 		{name: MemoryEvent{}.TableName(), tableName: "memory_events"},
+		{name: EvalCase{}.TableName(), tableName: "eval_cases"},
+		{name: EvalRun{}.TableName(), tableName: "eval_runs"},
 	}
 
 	for _, tt := range tests {
