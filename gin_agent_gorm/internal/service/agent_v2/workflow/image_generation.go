@@ -2,14 +2,13 @@ package workflow
 
 import (
 	"gin-biz-web-api/internal/service/agent_v2/agents"
-	"gin-biz-web-api/internal/service/agent_v2/domain"
 	"gin-biz-web-api/internal/service/agent_v2/tools"
 )
 
 // ImageGenerationWorkflowOptions wires the first real text-to-image workflow.
 type ImageGenerationWorkflowOptions struct {
 	Registry            *tools.Registry
-	ArtifactWriter      agents.ArtifactWriter
+	ArtifactWriter      agents.CompositionStore
 	TextModelConfigID   uint
 	ImageModelConfigID  uint
 	VisionModelConfigID uint
@@ -42,38 +41,11 @@ func MockImageGenerationWorkflow() Workflow {
 
 // ImageGenerationWorkflow creates the first real V2 image generation workflow.
 func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
-	var reviewNode domain.AgentNode = agents.NewMockVisionReviewAgent(0.7)
-	if options.Registry != nil && options.VisionModelConfigID > 0 {
-		reviewNode = agents.NewVisionReviewAgent(options.Registry, agents.VisionReviewAgentOptions{
-			VisionModelConfigID: options.VisionModelConfigID,
-			OCRModelConfigID:    options.OCRModelConfigID,
-			MinPassingScore:     0.7,
-		})
-	}
 	return Sequential(
 		"image_generation_v2",
-		"0.3.0",
+		"0.4.0",
 		agents.NewIntentRouterAgent(),
 		agents.NewRequirementAgentWithText(options.Registry, options.TextModelConfigID),
-		agents.NewMemoryAgent(),
-		agents.NewPromptAgentWithText(options.Registry, options.TextModelConfigID),
-		agents.NewSafetyAgent("pre_generation_safety_agent", agents.SafetyPhaseText, options.Registry),
-		agents.NewImageGenerationAgent(options.Registry, agents.ImageGenerationAgentOptions{
-			ImageModelConfigID: options.ImageModelConfigID,
-			CandidateCount:     options.CandidateCount,
-		}),
-		agents.NewSafetyAgent("post_generation_safety_agent", agents.SafetyPhaseImage, options.Registry),
-		agents.NewArtifactAgent(options.ArtifactWriter, agents.ArtifactAgentOptions{
-			ModelProvider: options.ModelProvider,
-			ModelName:     options.ModelName,
-		}),
-		agents.NewPosterRenderAgent(options.ArtifactWriter),
-		reviewNode,
-		agents.NewRankerAgent(),
-		agents.NewRefinerAgent(options.Registry, options.ArtifactWriter, agents.RefinerAgentOptions{
-			ImageModelConfigID: options.ImageModelConfigID,
-			ModelProvider:      options.ModelProvider,
-			ModelName:          options.ModelName,
-		}),
+		agents.NewImageCompositionAgent(options.ArtifactWriter),
 	)
 }

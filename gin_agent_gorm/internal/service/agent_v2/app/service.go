@@ -56,7 +56,7 @@ type Service struct {
 
 // CreateRunRequest 是创建 Agent Run 的请求体。
 type CreateRunRequest struct {
-	Content              string `json:"content" form:"content" binding:"required"`
+	Content              string `json:"content" form:"content"`
 	TaskType             string `json:"task_type" form:"task_type"`
 	IdempotencyKey       string `json:"idempotency_key" form:"idempotency_key"`
 	TextModelConfigID    uint   `json:"text_model_config_id" form:"text_model_config_id"`
@@ -307,6 +307,11 @@ func (svc *Service) createRun(
 			},
 			OCRProvider: visionProvider,
 		}, svc.dao))
+	}
+
+	request.Content = strings.TrimSpace(request.Content)
+	if request.Content == "" {
+		request.Content = "compose final image from uploaded assets"
 	}
 
 	// 第二步：保存触发本次 Agent Run 的用户消息。

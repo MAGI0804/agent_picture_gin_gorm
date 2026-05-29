@@ -334,7 +334,7 @@ interface StepResultSnapshot {
 }
 
 const promptHistory = ref<PromptHistoryItem[]>([])
-const canRun = computed(() => Boolean(prompt.value.trim() && activeConversationId.value && !running.value))
+const canRun = computed(() => Boolean((prompt.value.trim() || artifacts.value.some(item => item.kind === 'image')) && activeConversationId.value && !running.value))
 const canRetryFailedRun = computed(() => activeRun.value?.status === 'failed' && Boolean(retryPromptText().trim()) && Boolean(activeConversationId.value))
 const clarificationQuestions = computed(() => extractClarificationQuestions())
 const canResumeRun = computed(() => {

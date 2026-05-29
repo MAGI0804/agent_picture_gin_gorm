@@ -75,7 +75,7 @@ func TestWorkflowOrderedNodesRejectsCycle(t *testing.T) {
 	}
 }
 
-func TestImageGenerationWorkflowIncludesVisionReviewAfterArtifacts(t *testing.T) {
+func TestImageGenerationWorkflowUsesSimpleCompositionPipeline(t *testing.T) {
 	flow := ImageGenerationWorkflow(ImageGenerationWorkflowOptions{})
 
 	nodes, err := flow.OrderedNodes()
@@ -90,16 +90,7 @@ func TestImageGenerationWorkflowIncludesVisionReviewAfterArtifacts(t *testing.T)
 	want := []string{
 		"intent_router",
 		"requirement_agent",
-		"memory_agent",
-		"prompt_agent",
-		"pre_generation_safety_agent",
-		"image_generation_agent",
-		"post_generation_safety_agent",
-		"artifact_agent",
-		"poster_render_agent",
-		"vision_review_agent",
-		"ranker_agent",
-		"refiner_agent",
+		"image_composition_agent",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("ordered nodes = %#v, want %#v", got, want)
