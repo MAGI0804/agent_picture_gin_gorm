@@ -63,6 +63,7 @@ type CreateRunRequest struct {
 	ImageModelConfigID   uint   `json:"image_model_config_id" form:"image_model_config_id"`
 	CandidateCount       int    `json:"candidate_count" form:"candidate_count"`
 	DisableClarification bool   `json:"disable_clarification" form:"disable_clarification"`
+	ArtifactIDs          []uint `json:"artifact_ids" form:"artifact_ids"`
 }
 
 // ResumeRunRequest carries the user's clarification answer for a waiting run.
@@ -266,6 +267,22 @@ func (svc *Service) createRun(
 	}, svc.dao)); err != nil {
 		return nil, err
 	}
+	if err := registry.Register(tools.InstrumentTool(tools.Tool{
+		Name:          runtimeImageModelName(imageConfig.Config) + "-edit",
+		Kind:          tools.KindImageEdit,
+		Provider:      imageConfig.Config.Provider,
+		Model:         runtimeImageModelName(imageConfig.Config),
+		ModelConfigID: imageConfig.GlobalID,
+		Capability: tools.Capability{
+			MaxPromptChars:     8000,
+			SupportsImageInput: true,
+			MaxCandidates:      1,
+			CostPolicy:         "real_provider",
+		},
+		ImageEditProvider: imageAdapter,
+	}, svc.dao)); err != nil {
+		return nil, err
+	}
 	if textConfigErr == nil {
 		textAdapter := tools.NewLegacyProviderAdapter(textConfig.Config)
 		_ = registry.Register(tools.InstrumentTool(tools.Tool{
@@ -343,8 +360,9 @@ func (svc *Service) createRun(
 			"image_model_name":      runtimeImageModelName(imageConfig.Config),
 		},
 	}
-	if request.DisableClarification {
-		state.Metadata["disable_clarification"] = "true"
+	state.Metadata["disable_clarification"] = "true"
+	if len(request.ArtifactIDs) > 0 {
+		state.Metadata["input_artifact_ids"] = mustJSON(request.ArtifactIDs)
 	}
 	if visionConfigErr == nil {
 		state.Metadata["vision_model_config_id"] = uintToString(visionConfig.GlobalID)
@@ -368,7 +386,7 @@ func (svc *Service) createRun(
 		Status:               domain.RunStatusCreated,
 		TaskType:             state.TaskType,
 		WorkflowName:         "image_generation_v2",
-		WorkflowVersion:      "0.3.0",
+		WorkflowVersion:      "0.7.0",
 		StateJSON:            mustJSON(state),
 		BudgetJSON:           mustJSON(state.Budget),
 		IdempotencyKey:       idempotencyKey,

@@ -52,6 +52,7 @@ func (agent *IntentRouterAgent) Run(ctx context.Context, state domain.RunState) 
 type RequirementAgent struct {
 	registry          *tools.Registry
 	textModelConfigID uint
+	requireText       bool
 }
 
 func NewRequirementAgent() *RequirementAgent {
@@ -60,6 +61,10 @@ func NewRequirementAgent() *RequirementAgent {
 
 func NewRequirementAgentWithText(registry *tools.Registry, textModelConfigID uint) *RequirementAgent {
 	return &RequirementAgent{registry: registry, textModelConfigID: textModelConfigID}
+}
+
+func NewRequirementAgentWithRequiredText(registry *tools.Registry, textModelConfigID uint) *RequirementAgent {
+	return &RequirementAgent{registry: registry, textModelConfigID: textModelConfigID, requireText: true}
 }
 
 func (agent *RequirementAgent) Key() string {
@@ -80,7 +85,13 @@ func (agent *RequirementAgent) Run(ctx context.Context, state domain.RunState) (
 		if err == nil {
 			return result, nil
 		}
+		if agent.requireText {
+			return domain.StepResult{}, err
+		}
 		return fallbackRequirementResult(state, err.Error()), nil
+	}
+	if agent.requireText {
+		return domain.StepResult{}, errors.New("required text provider is unavailable")
 	}
 	return fallbackRequirementResult(state, ""), nil
 }
@@ -139,6 +150,7 @@ func (agent *MemoryAgent) Run(ctx context.Context, state domain.RunState) (domai
 type PromptAgent struct {
 	registry          *tools.Registry
 	textModelConfigID uint
+	requireText       bool
 }
 
 func NewPromptAgent() *PromptAgent {
@@ -147,6 +159,10 @@ func NewPromptAgent() *PromptAgent {
 
 func NewPromptAgentWithText(registry *tools.Registry, textModelConfigID uint) *PromptAgent {
 	return &PromptAgent{registry: registry, textModelConfigID: textModelConfigID}
+}
+
+func NewPromptAgentWithRequiredText(registry *tools.Registry, textModelConfigID uint) *PromptAgent {
+	return &PromptAgent{registry: registry, textModelConfigID: textModelConfigID, requireText: true}
 }
 
 func (agent *PromptAgent) Key() string {
@@ -169,7 +185,13 @@ func (agent *PromptAgent) Run(ctx context.Context, state domain.RunState) (domai
 		if err == nil {
 			return result, nil
 		}
+		if agent.requireText {
+			return domain.StepResult{}, err
+		}
 		return fallbackPromptResult(state, err.Error()), nil
+	}
+	if agent.requireText {
+		return domain.StepResult{}, errors.New("required text provider is unavailable")
 	}
 	return fallbackPromptResult(state, ""), nil
 }
@@ -459,7 +481,7 @@ type requirementProviderOutput struct {
 	AspectRatio       string             `json:"aspect_ratio"`
 	MustInclude       flexibleStringList `json:"must_include"`
 	MustAvoid         flexibleStringList `json:"must_avoid"`
-	NeedClarification bool               `json:"need_clarification"`
+	NeedClarification flexibleBool       `json:"need_clarification"`
 	Questions         flexibleStringList `json:"questions"`
 	Scene             string             `json:"scene"`
 	Composition       string             `json:"composition"`
@@ -537,7 +559,7 @@ func parseRequirementJSON(raw string, userRequest string) (domain.ImageRequireme
 		AspectRatio:       coalesce(decoded.AspectRatio, inferAspectRatio(userRequest)),
 		MustInclude:       nonEmptyStrings(decoded.MustInclude),
 		MustAvoid:         nonEmptyStrings(decoded.MustAvoid),
-		NeedClarification: decoded.NeedClarification,
+		NeedClarification: bool(decoded.NeedClarification),
 		Questions:         nonEmptyStrings(decoded.Questions),
 		Scene:             strings.TrimSpace(decoded.Scene),
 		Composition:       strings.TrimSpace(decoded.Composition),
@@ -612,7 +634,70 @@ func parsePromptJSON(raw string, state domain.RunState) (domain.PromptBundle, er
 		aspectRatio = providerAspectRatio
 	}
 	bundle.Params["aspect_ratio"] = aspectRatio
+	if isReferenceEditState(state) {
+		bundle.PositivePrompt = preservedReferenceEditPrompt(state, bundle.PositivePrompt)
+		bundle.NegativePrompt = sanitizeEditNegativePrompt(bundle.NegativePrompt, state)
+		bundle.RenderTextSeparately = false
+	}
 	return bundle, nil
+}
+
+func isReferenceEditState(state domain.RunState) bool {
+	if len(inputArtifactIDs(state.Metadata)) > 0 {
+		return true
+	}
+	probe := strings.ToLower(requirementTextProbe(state))
+	return strings.Contains(probe, "template") ||
+		strings.Contains(probe, "logo") ||
+		strings.Contains(probe, "icon") ||
+		strings.Contains(probe, "模板") ||
+		strings.Contains(probe, "图标") ||
+		strings.Contains(probe, "文字") ||
+		strings.Contains(probe, "px")
+}
+
+func preservedReferenceEditPrompt(state domain.RunState, providerPrompt string) string {
+	parts := []string{
+		"Image editing task: use the uploaded/reference image as the base template. Do not redesign it as a new standalone product photo.",
+		"Follow the original user request exactly. Every text string, pixel offset, font family, font size, color value, orientation, font weight, slash color, and logo placement is authoritative.",
+	}
+	if strings.TrimSpace(state.UserRequest) != "" {
+		parts = append(parts, "Original user request:\n"+strings.TrimSpace(state.UserRequest))
+	}
+	if len(state.Requirements.LayoutHints) > 0 {
+		parts = append(parts, "Extracted layout constraints:\n- "+strings.Join(nonEmptyStrings(state.Requirements.LayoutHints), "\n- "))
+	}
+	if strings.TrimSpace(providerPrompt) != "" {
+		parts = append(parts, "Provider visual interpretation, secondary only and never allowed to override exact instructions:\n"+strings.TrimSpace(providerPrompt))
+	}
+	parts = append(parts, "Render all requested text and logos directly into the final bitmap image. Do not output SVG or separate text layers.")
+	return strings.Join(nonEmptyStrings(parts), "\n\n")
+}
+
+func sanitizeEditNegativePrompt(negative string, state domain.RunState) string {
+	remove := map[string]bool{}
+	probe := strings.ToLower(requirementTextProbe(state))
+	if strings.Contains(probe, "text") || strings.Contains(probe, "文字") {
+		remove["text"] = true
+		remove["unreadable text"] = true
+		remove["distorted text"] = true
+	}
+	if strings.Contains(probe, "logo") || strings.Contains(probe, "图标") {
+		remove["logo"] = true
+	}
+	values := splitProviderList(negative)
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" || remove[normalized] {
+			continue
+		}
+		filtered = append(filtered, value)
+	}
+	if len(filtered) == 0 {
+		return "blur, watermark, low quality"
+	}
+	return strings.Join(filtered, ", ")
 }
 
 type flexibleStringList []string
@@ -647,6 +732,28 @@ func (list *flexibleStringList) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 	return errors.New("expected string, string array, or object")
+}
+
+type flexibleBool bool
+
+func (value *flexibleBool) UnmarshalJSON(data []byte) error {
+	var flag bool
+	if err := json.Unmarshal(data, &flag); err == nil {
+		*value = flexibleBool(flag)
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err == nil {
+		normalized := strings.ToLower(strings.TrimSpace(text))
+		*value = normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "是"
+		return nil
+	}
+	var number float64
+	if err := json.Unmarshal(data, &number); err == nil {
+		*value = flexibleBool(number != 0)
+		return nil
+	}
+	return errors.New("expected bool, string, or number")
 }
 
 func splitProviderList(value string) []string {
@@ -703,6 +810,8 @@ func promptAgentSystemPrompt() string {
 		"params must include aspect_ratio when known.",
 		"Use clarifications as final user intent; do not copy clarification questions into the image prompt.",
 		"Use stable memory context only as factual constraints; do not invent unsupported claims.",
+		"For template/reference image editing, preserve every original text string, pixel offset, font, size, color, orientation, weight, and logo placement. Do not summarize these constraints into a generic photography prompt.",
+		"If the user asks to add text or a logo, never put text or logo in negative_prompt, and set render_text_separately to false because the final bitmap must contain the requested text.",
 	}, "\n")
 }
 

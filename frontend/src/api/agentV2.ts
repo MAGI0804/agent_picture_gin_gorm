@@ -8,6 +8,7 @@ export interface CreateAgentRunInput {
   imageModelConfigId: number
   candidateCount: number
   disableClarification: boolean
+  artifactIds: number[]
 }
 
 export function fetchModelSelection() {
@@ -24,6 +25,7 @@ export function createAgentRun(input: CreateAgentRunInput) {
       image_model_config_id: input.imageModelConfigId,
       candidate_count: input.candidateCount,
       disable_clarification: input.disableClarification,
+      artifact_ids: input.artifactIds,
       idempotency_key: `${input.conversationId}-${Date.now()}`
     })
   })

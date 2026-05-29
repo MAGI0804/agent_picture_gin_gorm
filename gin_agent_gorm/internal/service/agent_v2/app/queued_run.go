@@ -136,6 +136,22 @@ func (svc *Service) workflowForQueuedRun(userID uint, state domain.RunState) (wo
 	}, svc.dao)); err != nil {
 		return workflow.Workflow{}, err
 	}
+	if err := registry.Register(tools.InstrumentTool(tools.Tool{
+		Name:          runtimeImageModelName(imageConfig.Config) + "-edit",
+		Kind:          tools.KindImageEdit,
+		Provider:      imageConfig.Config.Provider,
+		Model:         runtimeImageModelName(imageConfig.Config),
+		ModelConfigID: imageConfig.GlobalID,
+		Capability: tools.Capability{
+			MaxPromptChars:     8000,
+			SupportsImageInput: true,
+			MaxCandidates:      1,
+			CostPolicy:         "real_provider",
+		},
+		ImageEditProvider: imageAdapter,
+	}, svc.dao)); err != nil {
+		return workflow.Workflow{}, err
+	}
 
 	textModelConfigID := metadataUint(state.Metadata, "text_model_config_id")
 	if textModelConfigID > 0 {

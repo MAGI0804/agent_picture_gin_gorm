@@ -108,11 +108,13 @@ function outputDetails(step: AgentStep) {
   add('比例', 'aspect_ratio')
   add('正向提示词', 'positive_prompt')
   add('负向提示词', 'negative_prompt')
+  add('输入图片ID', 'input_artifact_ids')
+  add('输入图片数', 'image_ref_count')
   add('产物数量', 'artifact_count')
   add('文字层数量', 'text_layer_count')
   add('审核问题', 'issues')
   add('是否优化', 'should_refine')
-  return details.slice(0, 6)
+  return details.slice(0, 8)
 }
 
 function stepNameLabel(step: AgentStep) {

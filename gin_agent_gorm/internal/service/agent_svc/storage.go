@@ -35,13 +35,18 @@ type LocalObjectStore struct {
 
 // NewObjectStore 根据配置创建对象存储实例。
 func NewObjectStore() ObjectStore {
-	rootPath := config.GetString("cfg.ai_agent.storage.local_path", "public/artifacts")
+	rootPath := "public/artifacts"
+	publicURL := "/artifacts"
+	if config.Instance() != nil {
+		rootPath = config.GetString("cfg.ai_agent.storage.local_path", rootPath)
+		publicURL = config.GetString("cfg.ai_agent.storage.public_path", publicURL)
+	}
 	if !filepath.IsAbs(rootPath) {
 		rootPath = filepath.Join(global.RootPath, rootPath)
 	}
 	return &LocalObjectStore{
 		rootPath:  rootPath,
-		publicURL: config.GetString("cfg.ai_agent.storage.public_path", "/artifacts"),
+		publicURL: publicURL,
 	}
 }
 

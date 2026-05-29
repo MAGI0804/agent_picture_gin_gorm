@@ -37,6 +37,7 @@ func (provider *fakeImageProvider) GenerateImage(
 type fakeTextProvider struct {
 	request tools.TextRequest
 	result  tools.TextResult
+	err     error
 }
 
 func (provider *fakeTextProvider) GenerateText(
@@ -44,13 +45,30 @@ func (provider *fakeTextProvider) GenerateText(
 	request tools.TextRequest,
 ) (tools.TextResult, error) {
 	provider.request = request
+	if provider.err != nil {
+		return tools.TextResult{}, provider.err
+	}
+	return provider.result, nil
+}
+
+type fakeImageEditProvider struct {
+	request tools.ImageEditRequest
+	result  tools.ImageEditResult
+}
+
+func (provider *fakeImageEditProvider) EditImage(
+	ctx context.Context,
+	request tools.ImageEditRequest,
+) (tools.ImageEditResult, error) {
+	provider.request = request
 	return provider.result, nil
 }
 
 type fakeArtifactWriter struct {
-	input    CreateCandidateGroupInput
-	versions []model.ArtifactVersion
-	render   artifactsvc.CreateRenderedArtifactInput
+	input     CreateCandidateGroupInput
+	versions  []model.ArtifactVersion
+	render    artifactsvc.CreateRenderedArtifactInput
+	artifacts []model.Artifact
 }
 
 func (writer *fakeArtifactWriter) CreateCandidateGroup(
@@ -71,6 +89,10 @@ func (writer *fakeArtifactWriter) CreateCandidateGroup(
 		versions = append(versions, model.ArtifactVersion{BaseModel: model.BaseModel{ID: uint(index + 20)}})
 	}
 	return artifacts, versions, nil
+}
+
+func (writer *fakeArtifactWriter) ListArtifacts(userID uint, conversationID uint) ([]model.Artifact, error) {
+	return writer.artifacts, nil
 }
 
 func (writer *fakeArtifactWriter) CreateRefinedVersion(input artifactsvc.CreateRefinedVersionInput) (model.ArtifactVersion, error) {
@@ -185,6 +207,29 @@ func TestRequirementAgentFallsBackOnInvalidProviderJSON(t *testing.T) {
 	}
 }
 
+func TestRequirementAgentRequiredTextReturnsProviderError(t *testing.T) {
+	textProvider := &fakeTextProvider{err: context.DeadlineExceeded}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	_, err := NewRequirementAgentWithRequiredText(registry, 7).Run(context.Background(), domain.RunState{
+		UserRequest: "把这张模板图加上标题和图标",
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want provider error")
+	}
+	if !strings.Contains(err.Error(), "requirement text provider failed") {
+		t.Fatalf("Run() error = %v, want provider failure surfaced", err)
+	}
+}
+
 func TestRequirementAgentAcceptsProviderListFieldsAsStrings(t *testing.T) {
 	textProvider := &fakeTextProvider{
 		result: tools.TextResult{
@@ -225,6 +270,46 @@ func TestRequirementAgentAcceptsProviderListFieldsAsStrings(t *testing.T) {
 	hints, ok := result.Output["layout_hints"].([]string)
 	if !ok || len(hints) != 2 {
 		t.Fatalf("layout_hints = %#v, want split string hints", result.Output["layout_hints"])
+	}
+}
+
+func TestRequirementAgentAcceptsProviderClarificationBoolAsString(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{
+			Text: `{
+				"subject": "template edit with exact text",
+				"style": "commercial layout edit",
+				"aspect_ratio": "3:4",
+				"must_include": ["Do Small Things"],
+				"must_avoid": ["blur"],
+				"need_clarification": "false",
+				"questions": [],
+				"scene": "existing clothing template",
+				"composition": "preserve template",
+				"text_policy": "render text directly",
+				"layout_hints": ["50px from top"],
+				"target_use": "product poster"
+			}`,
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	result, err := NewRequirementAgentWithRequiredText(registry, 7).Run(context.Background(), domain.RunState{
+		UserRequest: "add exact text to template",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output["need_clarification"] != false {
+		t.Fatalf("need_clarification = %#v, want false", result.Output["need_clarification"])
 	}
 }
 
@@ -343,6 +428,84 @@ func TestPromptAgentFallsBackOnInvalidProviderJSON(t *testing.T) {
 	issues, ok := result.Output["schema_issues"].([]string)
 	if !ok || len(issues) == 0 {
 		t.Fatalf("schema_issues = %#v, want fallback issue", result.Output["schema_issues"])
+	}
+}
+
+func TestPromptAgentPreservesExactReferenceEditInstructions(t *testing.T) {
+	textProvider := &fakeTextProvider{
+		result: tools.TextResult{
+			Text: `{
+				"positive_prompt": "Professional e-commerce product photography of a children's POLO vest.",
+				"negative_prompt": "cluttered background, text, watermark, logo, blurry",
+				"render_text_separately": true,
+				"params": {"aspect_ratio": "3:4"}
+			}`,
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	result, err := NewPromptAgentWithRequiredText(registry, 7).Run(context.Background(), domain.RunState{
+		UserRequest: "左上角文字内容：Do Small Things\n字体颜色：灰色 #b6b6b4\n左下角 LOGO 设置",
+		Requirements: domain.ImageRequirements{
+			Subject:           "template edit",
+			TextPolicy:        "render text directly",
+			LayoutHints:       []string{"距左边缘 50px、距上边缘 50px"},
+			AspectRatio:       "3:4",
+			MustInclude:       []string{"Do Small Things", "LOGO"},
+			MustAvoid:         []string{"blur"},
+			NeedClarification: false,
+		},
+		Metadata: map[string]string{
+			"input_artifact_ids": "[54,55]",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	positive := result.Output["positive_prompt"].(string)
+	if !strings.Contains(positive, "Do Small Things") || !strings.Contains(positive, "#b6b6b4") || !strings.Contains(positive, "50px") {
+		t.Fatalf("positive_prompt = %q, want exact original constraints preserved", positive)
+	}
+	negative := strings.ToLower(result.Output["negative_prompt"].(string))
+	if strings.Contains(negative, "text") || strings.Contains(negative, "logo") {
+		t.Fatalf("negative_prompt = %q, should not reject requested text/logo", negative)
+	}
+	if result.Output["render_text_separately"] != false {
+		t.Fatalf("render_text_separately = %#v, want false for bitmap edit", result.Output["render_text_separately"])
+	}
+}
+
+func TestPromptAgentRequiredTextReturnsProviderError(t *testing.T) {
+	textProvider := &fakeTextProvider{err: context.DeadlineExceeded}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "text-model",
+		Kind:          tools.KindText,
+		ModelConfigID: 7,
+		TextProvider:  textProvider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+
+	_, err := NewPromptAgentWithRequiredText(registry, 7).Run(context.Background(), domain.RunState{
+		UserRequest: "把这张模板图加上标题和图标",
+		Requirements: domain.ImageRequirements{
+			Subject: "模板图编辑",
+		},
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want provider error")
+	}
+	if !strings.Contains(err.Error(), "prompt text provider failed") {
+		t.Fatalf("Run() error = %v, want provider failure surfaced", err)
 	}
 }
 
@@ -529,6 +692,92 @@ func TestImageGenerationAgentAppliesToolCapabilityLimits(t *testing.T) {
 	}
 	if provider.request.CandidateCount != 1 {
 		t.Fatalf("CandidateCount = %d, want capability max", provider.request.CandidateCount)
+	}
+}
+
+func TestImageEditAgentUsesSelectedUploadedArtifactsAndPersistsAIEdit(t *testing.T) {
+	provider := &fakeImageEditProvider{
+		result: tools.ImageEditResult{
+			Images: []tools.GeneratedImage{
+				{
+					Name:       "edited.png",
+					Kind:       "image",
+					MimeType:   "image/png",
+					ObjectKey:  "edited-key",
+					PreviewURL: "/artifacts/edited-key",
+					SizeBytes:  25,
+					Hash:       "edited-hash",
+				},
+			},
+		},
+	}
+	registry := tools.NewRegistry()
+	if err := registry.Register(tools.Tool{
+		Name:          "image-edit-model",
+		Kind:          tools.KindImageEdit,
+		ModelConfigID: 42,
+		Capability: tools.Capability{
+			MaxCandidates:      1,
+			SupportsImageInput: true,
+		},
+		ImageEditProvider: provider,
+	}); err != nil {
+		t.Fatalf("Register() error = %v", err)
+	}
+	writer := &fakeArtifactWriter{
+		artifacts: []model.Artifact{
+			{BaseModel: model.BaseModel{ID: 51}, UserID: 4, ConversationID: 5, AgentRunID: 0, Kind: "image", ObjectKey: "template-key"},
+			{BaseModel: model.BaseModel{ID: 52}, UserID: 4, ConversationID: 5, AgentRunID: 0, Kind: "image", ObjectKey: "icon-key"},
+			{BaseModel: model.BaseModel{ID: 99}, UserID: 4, ConversationID: 5, AgentRunID: 3, Kind: "image", ObjectKey: "old-run-key"},
+		},
+	}
+	agent := NewImageEditAgent(registry, writer, ImageEditAgentOptions{
+		ImageModelConfigID: 42,
+		CandidateCount:     3,
+		ModelProvider:      "google",
+		ModelName:          "image-edit",
+	})
+
+	result, err := agent.Run(context.Background(), domain.RunState{
+		RunID:          3,
+		CurrentStepID:  8,
+		UserID:         4,
+		ConversationID: 5,
+		UserRequest:    "在模板图上加标题，右下角放 icon",
+		Prompts: domain.PromptBundle{
+			PositivePrompt: "Edit the template image with title text and place the icon in the lower right corner.",
+		},
+		Metadata: map[string]string{
+			"input_artifact_ids": "[51,52]",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if provider.request.UserID != 4 || provider.request.RunID != 3 || provider.request.StepID != 8 {
+		t.Fatalf("edit request scope = %#v, want run/user/step scope", provider.request)
+	}
+	if got, want := strings.Join(provider.request.ImageRefs, ","), "template-key,icon-key"; got != want {
+		t.Fatalf("ImageRefs = %q, want %q", got, want)
+	}
+	if provider.request.CandidateCount != 1 {
+		t.Fatalf("CandidateCount = %d, want capped by tool capability", provider.request.CandidateCount)
+	}
+	if !strings.Contains(provider.request.Prompt, "first reference image as the template") {
+		t.Fatalf("Prompt = %q, want template instruction", provider.request.Prompt)
+	}
+	if len(writer.input.Artifacts) != 1 {
+		t.Fatalf("len(writer.input.Artifacts) = %d, want one edited artifact", len(writer.input.Artifacts))
+	}
+	candidate := writer.input.Artifacts[0]
+	if candidate.Version.Operation != "ai_edit" {
+		t.Fatalf("Operation = %q, want ai_edit", candidate.Version.Operation)
+	}
+	if candidate.Artifact.ParentArtifactID != 51 {
+		t.Fatalf("ParentArtifactID = %d, want template artifact id", candidate.Artifact.ParentArtifactID)
+	}
+	if len(result.Artifacts) != 1 || result.Artifacts[0].ID != 10 || result.Artifacts[0].VersionID != 20 {
+		t.Fatalf("artifact refs = %#v, want persisted edit refs", result.Artifacts)
 	}
 }
 

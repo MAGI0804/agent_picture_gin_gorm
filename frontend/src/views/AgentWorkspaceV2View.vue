@@ -76,6 +76,11 @@
           </ol>
         </section>
 
+        <section v-if="runInputArtifactIds.length" class="v2-run-inputs">
+          <strong>本次输入图片</strong>
+          <span>{{ runInputArtifactIds.length }} 张 · ID {{ runInputArtifactIds.join(', ') }}</span>
+        </section>
+
         <section v-if="activeRun?.status === 'waiting_user'" class="v2-clarification">
           <header>
             <strong>需要补充信息</strong>
@@ -112,15 +117,17 @@
         v-model:disable-clarification="disableClarification"
         v-model:prompt="prompt"
         :model-selection="modelSelection"
+        :attachments="composerAttachments"
         :running="running"
         :uploading="uploadingArtifact"
         :can-run="canRun"
         :can-retry="canRetryFailedRun"
         :error-message="errorMessage"
         @run="runAgent"
-        @clear="prompt = ''"
+        @clear="clearComposer"
         @retry="retryFailedRun"
-        @upload="uploadArtifact"
+        @attach-files="attachComposerFiles"
+        @remove-attachment="removeComposerAttachment"
       />
     </section>
 
@@ -159,6 +166,7 @@
               {{ selectingArtifact ? '保存中...' : '设为选中' }}
             </button>
             <button type="button" @click="downloadSelected">下载</button>
+            <button type="button" @click="useSelectedAsTemplate">作为模板继续</button>
           </div>
         </div>
         <img
@@ -327,6 +335,14 @@ interface PromptHistoryItem {
   createdAt: number
 }
 
+interface ComposerAttachment {
+  id: string
+  name: string
+  url: string
+  file?: File
+  artifactId?: number
+}
+
 interface StepResultSnapshot {
   output?: {
     questions?: unknown
@@ -334,9 +350,11 @@ interface StepResultSnapshot {
 }
 
 const promptHistory = ref<PromptHistoryItem[]>([])
-const canRun = computed(() => Boolean((prompt.value.trim() || artifacts.value.some(item => item.kind === 'image')) && activeConversationId.value && !running.value))
+const composerAttachments = ref<ComposerAttachment[]>([])
+const canRun = computed(() => Boolean((prompt.value.trim() || composerAttachments.value.length) && activeConversationId.value && !running.value && !uploadingArtifact.value))
 const canRetryFailedRun = computed(() => activeRun.value?.status === 'failed' && Boolean(retryPromptText().trim()) && Boolean(activeConversationId.value))
 const clarificationQuestions = computed(() => extractClarificationQuestions())
+const runInputArtifactIds = computed(() => inputArtifactIdsFromRun())
 const canResumeRun = computed(() => {
   return activeRun.value?.status === 'waiting_user' && Boolean(clarificationAnswer.value.trim()) && !resumingRun.value
 })
@@ -364,6 +382,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   clearRunPolling()
   revokeAllPreviewURLs()
+  revokeComposerAttachmentURLs()
 })
 
 async function loadModelSelection() {
@@ -407,6 +426,7 @@ async function openConversation(id: number) {
   versions.value = []
   clarificationAnswer.value = ''
   compareArtifactIds.value = []
+  clearComposer()
   loadPromptHistory(id)
   await Promise.all([loadArtifacts(), loadMemories(), loadEvolution()])
 }
@@ -421,6 +441,7 @@ async function runAgent() {
   toolInvocations.value = []
   clarificationAnswer.value = ''
   try {
+    const artifactIds = await uploadComposerAttachments()
     recordPromptHistory(activeConversationId.value, originalPrompt)
     const data = await createAgentRun({
       conversationId: activeConversationId.value,
@@ -428,7 +449,8 @@ async function runAgent() {
       textModelConfigId: textModelConfigId.value,
       imageModelConfigId: imageModelConfigId.value,
       candidateCount: candidateCount.value,
-      disableClarification: disableClarification.value
+      disableClarification: disableClarification.value,
+      artifactIds
     })
     await applyRunResponse(data)
     if (data.agent_run?.id && ['created', 'queued', 'running'].includes(data.agent_run.status)) {
@@ -437,6 +459,7 @@ async function runAgent() {
       })
     }
     prompt.value = ''
+    clearComposerAttachments()
     await loadConversations()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '运行失败'
@@ -608,6 +631,78 @@ async function selectArtifact(artifact: Artifact) {
 async function downloadSelected() {
   if (!selectedArtifact.value) return
   await downloadV2Artifact(selectedArtifact.value.id, selectedArtifact.value.name)
+}
+
+function attachComposerFiles(files: File[]) {
+  const next = files.map(file => ({
+    id: `file-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    name: file.name || 'pasted-image.png',
+    url: URL.createObjectURL(file),
+    file
+  }))
+  composerAttachments.value = [...composerAttachments.value, ...next]
+}
+
+function removeComposerAttachment(id: string) {
+  const item = composerAttachments.value.find(attachment => attachment.id === id)
+  if (item?.file) {
+    URL.revokeObjectURL(item.url)
+  }
+  composerAttachments.value = composerAttachments.value.filter(attachment => attachment.id !== id)
+}
+
+function clearComposer() {
+  prompt.value = ''
+  clearComposerAttachments()
+}
+
+function clearComposerAttachments() {
+  revokeComposerAttachmentURLs()
+  composerAttachments.value = []
+}
+
+function revokeComposerAttachmentURLs() {
+  for (const item of composerAttachments.value) {
+    if (item.file) {
+      URL.revokeObjectURL(item.url)
+    }
+  }
+}
+
+async function uploadComposerAttachments() {
+  if (!activeConversationId.value || !composerAttachments.value.length) return []
+  uploadingArtifact.value = true
+  try {
+    const artifactIds: number[] = []
+    for (const item of composerAttachments.value) {
+      if (item.artifactId) {
+        artifactIds.push(item.artifactId)
+        continue
+      }
+      if (!item.file) continue
+      const data = await uploadConversationArtifact(activeConversationId.value, item.file)
+      artifactIds.push(data.artifact.id)
+    }
+    return artifactIds
+  } finally {
+    uploadingArtifact.value = false
+  }
+}
+
+function useSelectedAsTemplate() {
+  if (!selectedArtifact.value || !isPreviewableArtifact(selectedArtifact.value)) return
+  const previewUrl = previewUrlFor(selectedArtifact.value)
+  if (!previewUrl) return
+  const item: ComposerAttachment = {
+    id: `artifact-${selectedArtifact.value.id}`,
+    artifactId: selectedArtifact.value.id,
+    name: selectedArtifact.value.name,
+    url: previewUrl
+  }
+  composerAttachments.value = [
+    item,
+    ...composerAttachments.value.filter(attachment => attachment.artifactId !== selectedArtifact.value?.id)
+  ]
 }
 
 async function uploadArtifact(file?: File) {
@@ -859,6 +954,21 @@ function extractClarificationQuestions() {
     const questions = payload.output?.questions
     if (!Array.isArray(questions)) return []
     return questions.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+  } catch {
+    return []
+  }
+}
+
+function inputArtifactIdsFromRun() {
+  const raw = activeRun.value?.state_json
+  if (!raw) return []
+  try {
+    const state = JSON.parse(raw) as { metadata?: Record<string, string> }
+    const value = state.metadata?.input_artifact_ids
+    if (!value) return []
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.map(Number).filter(id => Number.isFinite(id) && id > 0)
   } catch {
     return []
   }

@@ -180,6 +180,7 @@ export interface AgentRun {
   image_model_name?: string
   is_optimized?: boolean
   optimized_prompt?: string
+  state_json?: string
   error_message: string
 }
 

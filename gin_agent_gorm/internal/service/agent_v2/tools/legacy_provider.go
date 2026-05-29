@@ -156,6 +156,7 @@ func (adapter *LegacyProviderAdapter) EditImage(
 		Prompt:          prompt,
 		Intent:          "image_edit",
 		TaskType:        coalesceString(request.TaskType, "image_edit"),
+		ImageRefs:       append([]string{}, request.ImageRefs...),
 		Stream:          true,
 		ReturnReasoning: true,
 		Temperature:     adapter.config.Temperature,

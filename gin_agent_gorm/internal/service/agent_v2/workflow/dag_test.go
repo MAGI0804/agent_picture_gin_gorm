@@ -75,7 +75,7 @@ func TestWorkflowOrderedNodesRejectsCycle(t *testing.T) {
 	}
 }
 
-func TestImageGenerationWorkflowUsesSimpleCompositionPipeline(t *testing.T) {
+func TestImageGenerationWorkflowUsesAIEditThenCompositionPipeline(t *testing.T) {
 	flow := ImageGenerationWorkflow(ImageGenerationWorkflowOptions{})
 
 	nodes, err := flow.OrderedNodes()
@@ -90,6 +90,8 @@ func TestImageGenerationWorkflowUsesSimpleCompositionPipeline(t *testing.T) {
 	want := []string{
 		"intent_router",
 		"requirement_agent",
+		"prompt_agent",
+		"image_edit_agent",
 		"image_composition_agent",
 	}
 	if len(got) != len(want) {

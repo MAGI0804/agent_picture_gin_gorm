@@ -1,20 +1,42 @@
 <template>
-  <section class="v2-composer">
+  <section
+    class="v2-composer"
+    :class="{ 'is-dragging': dragging }"
+    @dragenter.prevent="dragging = true"
+    @dragover.prevent="dragging = true"
+    @dragleave.prevent="dragging = false"
+    @drop.prevent="handleDrop"
+  >
     <label class="v2-composer-input">
-      <span class="sr-only">图片需求</span>
+      <span class="sr-only">图片编辑需求</span>
       <textarea
         :value="prompt"
-        placeholder="输入图片需求，Ctrl + Enter 发送"
+        placeholder="描述要加的文字、图标位置和样式。可直接粘贴或拖入图片，第一张作为模板。"
         @input="$emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
+        @paste="handlePaste"
         @keydown.enter.ctrl.prevent="$emit('run')"
       />
-      <div class="v2-inline-tools">
-        <button class="v2-tool-image" type="button" aria-label="上传图片" title="上传图片" @click="uploadDialogOpen = true">▧</button>
-        <button class="v2-tool-clear" type="button" aria-label="清空" title="清空" @click="$emit('clear')">×</button>
-      </div>
     </label>
 
-    <div class="v2-actions">
+    <div v-if="attachments.length" class="v2-attachment-strip" aria-label="本次使用的图片">
+      <article v-for="(item, index) in attachments" :key="item.id" class="v2-attachment">
+        <img :src="item.url" :alt="item.name" />
+        <div>
+          <strong>{{ index === 0 ? '模板图' : `图标 ${index}` }}</strong>
+          <span>{{ item.name }}</span>
+        </div>
+        <button type="button" :aria-label="`移除 ${item.name}`" @click="$emit('remove-attachment', item.id)">×</button>
+      </article>
+    </div>
+
+    <div class="v2-composer-footer">
+      <div class="v2-composer-tools">
+        <input ref="fileInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/gif" multiple @change="selectFiles" />
+        <button type="button" @click="fileInput?.click()">添加图片</button>
+        <button type="button" :disabled="!prompt && !attachments.length" @click="$emit('clear')">清空</button>
+        <button type="button" :disabled="!canRetry" @click="$emit('retry')">重试</button>
+      </div>
+
       <div class="v2-model-row">
         <select aria-label="文本模型" :value="textModelConfigId" @change="$emit('update:textModelConfigId', Number(($event.target as HTMLSelectElement).value))">
           <option :value="0">自动文本</option>
@@ -28,53 +50,26 @@
             {{ item.model_name }}
           </option>
         </select>
-        <select aria-label="候选数" :value="candidateCount" @change="$emit('update:candidateCount', Number(($event.target as HTMLSelectElement).value))">
-          <option :value="1">1 张</option>
-          <option :value="2">2 张</option>
-          <option :value="3">3 张</option>
-        </select>
-        <label class="v2-toggle-line">
-          <input
-            type="checkbox"
-            :checked="disableClarification"
-            @change="$emit('update:disableClarification', ($event.target as HTMLInputElement).checked)"
-          />
-          <span>不追问</span>
-        </label>
       </div>
-      <button class="v2-action-icon" type="button" :disabled="running" @click="$emit('clear')" aria-label="清空" title="清空">×</button>
-      <button class="v2-action-icon" type="button" :disabled="!canRetry" @click="$emit('retry')" aria-label="重试" title="重试">↻</button>
-      <button class="primary v2-send-button" type="button" :disabled="!canRun" aria-label="发送" @click="$emit('run')">
-        <span>{{ running ? '...' : '→' }}</span>
+
+      <button class="primary v2-send-button" type="button" :disabled="!canRun" @click="$emit('run')">
+        {{ running || uploading ? '处理中' : '生成图片' }}
       </button>
-      <span v-if="errorMessage">{{ errorMessage }}</span>
     </div>
 
-    <div v-if="uploadDialogOpen" class="v2-upload-backdrop" @click.self="uploadDialogOpen = false">
-      <section class="v2-upload-dialog" role="dialog" aria-modal="true" aria-label="上传参考图片">
-        <header>
-          <strong>上传参考图片</strong>
-          <button type="button" aria-label="关闭" @click="uploadDialogOpen = false">×</button>
-        </header>
-        <label>
-          图片文件
-          <input type="file" accept="image/png,image/jpeg,image/gif" @change="selectUploadFile" />
-        </label>
-        <p v-if="selectedUploadName" class="muted">{{ selectedUploadName }}</p>
-        <div class="v2-actions">
-          <button type="button" @click="uploadDialogOpen = false">取消</button>
-          <button class="primary" type="button" :disabled="!selectedUploadFile || uploading" @click="submitUpload">
-            {{ uploading ? '上传中...' : '上传并选中' }}
-          </button>
-        </div>
-      </section>
-    </div>
+    <p v-if="errorMessage" class="v2-composer-error">{{ errorMessage }}</p>
   </section>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { ModelSelection } from '../../types'
+
+export interface ComposerAttachment {
+  id: string
+  name: string
+  url: string
+}
 
 defineProps<{
   modelSelection: ModelSelection | null
@@ -88,6 +83,7 @@ defineProps<{
   canRun: boolean
   canRetry: boolean
   errorMessage: string
+  attachments: ComposerAttachment[]
 }>()
 
 const emit = defineEmits<{
@@ -96,27 +92,35 @@ const emit = defineEmits<{
   'update:candidateCount': [value: number]
   'update:disableClarification': [value: boolean]
   'update:prompt': [value: string]
-  upload: [file: File]
+  'attach-files': [files: File[]]
+  'remove-attachment': [id: string]
   run: []
   clear: []
   retry: []
 }>()
 
-const uploadDialogOpen = ref(false)
-const selectedUploadFile = ref<File | null>(null)
-const selectedUploadName = ref('')
+const fileInput = ref<HTMLInputElement | null>(null)
+const dragging = ref(false)
 
-function selectUploadFile(event: Event) {
+function selectFiles(event: Event) {
   const input = event.target as HTMLInputElement
-  selectedUploadFile.value = input.files?.[0] || null
-  selectedUploadName.value = selectedUploadFile.value?.name || ''
+  emitImageFiles(Array.from(input.files || []))
+  input.value = ''
 }
 
-function submitUpload() {
-  if (!selectedUploadFile.value) return
-  emit('upload', selectedUploadFile.value)
-  selectedUploadFile.value = null
-  selectedUploadName.value = ''
-  uploadDialogOpen.value = false
+function handlePaste(event: ClipboardEvent) {
+  emitImageFiles(Array.from(event.clipboardData?.files || []))
+}
+
+function handleDrop(event: DragEvent) {
+  dragging.value = false
+  emitImageFiles(Array.from(event.dataTransfer?.files || []))
+}
+
+function emitImageFiles(files: File[]) {
+  const images = files.filter(file => file.type.startsWith('image/'))
+  if (images.length) {
+    emit('attach-files', images)
+  }
 }
 </script>

@@ -26,6 +26,7 @@ type GenerationRequest struct {
 	Intent          string
 	TaskType        string
 	AspectRatio     string
+	ImageRefs       []string
 	Stream          bool
 	ReturnReasoning bool
 	Temperature     string
@@ -594,7 +595,13 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 	if isDashScopeProvider(providerName, baseURL) {
 		return provider.generateDashScopeImage(request, baseURL, apiKey, modelName)
 	}
+	if len(request.ImageRefs) > 0 && isGoogleGeminiAPIBaseURL(baseURL) {
+		return provider.generateGoogleGeminiImageEdit(request, baseURL, apiKey)
+	}
 	if isGoogleImagenProvider(providerName, baseURL, modelName) {
+		if len(request.ImageRefs) > 0 {
+			return provider.generateGoogleImagenEditImage(request, baseURL, apiKey, modelName)
+		}
 		return provider.generateGoogleImagenImage(request, baseURL, apiKey, modelName)
 	}
 
@@ -614,6 +621,131 @@ func (provider *HTTPProvider) Generate(request GenerationRequest) ([]GeneratedFi
 	}
 
 	file, err := provider.parseOpenAIImageFile(body, request.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedFile{file}, nil
+}
+
+func (provider *HTTPProvider) generateGoogleGeminiImageEdit(
+	request GenerationRequest,
+	baseURL string,
+	apiKey string,
+) ([]GeneratedFile, error) {
+	modelName := runtimeConfigString(provider.config, "image_edit_model", "edit_model", "editModel")
+	if modelName == "" {
+		modelName = "gemini-2.5-flash-image"
+	}
+	parts := []map[string]interface{}{
+		{"text": request.Prompt},
+	}
+	store := NewObjectStore()
+	for _, imageRef := range request.ImageRefs {
+		imageRef = strings.TrimSpace(imageRef)
+		if imageRef == "" {
+			continue
+		}
+		content, err := ioutil.ReadFile(store.Path(imageRef))
+		if err != nil {
+			return nil, errors.Wrapf(err, "read image edit reference %q", imageRef)
+		}
+		parts = append(parts, map[string]interface{}{
+			"inlineData": map[string]interface{}{
+				"mimeType": http.DetectContentType(content),
+				"data":     base64.StdEncoding.EncodeToString(content),
+			},
+		})
+	}
+	if len(parts) == 1 {
+		return nil, errors.New("image edit reference images are empty")
+	}
+	payload := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{
+				"role":  "user",
+				"parts": parts,
+			},
+		},
+		"generationConfig": map[string]interface{}{
+			"responseModalities": []string{"TEXT", "IMAGE"},
+		},
+	}
+	endpoint := googleGeminiGenerateContentEndpoint(baseURL, modelName)
+	body, err := provider.doJSON("POST", endpoint, payload, modelName, "image-google-gemini-edit", func(req *http.Request) {
+		req.Header.Set("x-goog-api-key", apiKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+	file, err := provider.parseGoogleGeminiImageFile(body)
+	if err != nil {
+		return nil, err
+	}
+	return []GeneratedFile{file}, nil
+}
+
+func (provider *HTTPProvider) generateGoogleImagenEditImage(
+	request GenerationRequest,
+	baseURL string,
+	apiKey string,
+	modelName string,
+) ([]GeneratedFile, error) {
+	editModelName := runtimeConfigString(provider.config, "image_edit_model", "edit_model", "editModel")
+	if editModelName == "" {
+		editModelName = modelName
+	}
+	if !strings.Contains(strings.ToLower(editModelName), "capability") {
+		editModelName = "imagen-3.0-capability-001"
+	}
+	referenceImages := make([]map[string]interface{}, 0, len(request.ImageRefs))
+	store := NewObjectStore()
+	for index, imageRef := range request.ImageRefs {
+		imageRef = strings.TrimSpace(imageRef)
+		if imageRef == "" {
+			continue
+		}
+		content, err := ioutil.ReadFile(store.Path(imageRef))
+		if err != nil {
+			return nil, errors.Wrapf(err, "read image edit reference %q", imageRef)
+		}
+		referenceImages = append(referenceImages, map[string]interface{}{
+			"referenceType": "REFERENCE_TYPE_RAW",
+			"referenceId":   index + 1,
+			"referenceImage": map[string]interface{}{
+				"bytesBase64Encoded": base64.StdEncoding.EncodeToString(content),
+			},
+		})
+	}
+	if len(referenceImages) == 0 {
+		return nil, errors.New("image edit reference images are empty")
+	}
+
+	parameters := map[string]interface{}{
+		"sampleCount": 1,
+	}
+	if editMode := runtimeConfigString(provider.config, "edit_mode", "editMode"); editMode != "" {
+		parameters["editConfig"] = map[string]interface{}{
+			"editMode": editMode,
+		}
+	}
+	payload := map[string]interface{}{
+		"instances": []map[string]interface{}{
+			{
+				"prompt":          request.Prompt,
+				"referenceImages": referenceImages,
+			},
+		},
+		"parameters": parameters,
+	}
+	endpoint := googleImagenEndpoint(baseURL, editModelName)
+	body, err := provider.doJSON("POST", endpoint, payload, editModelName, "image-google-imagen-edit", func(req *http.Request) {
+		req.Header.Set("x-goog-api-key", apiKey)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	file, err := provider.parseGoogleImagenImageFile(body)
 	if err != nil {
 		return nil, err
 	}
@@ -864,6 +996,22 @@ func isGoogleImagenProvider(providerName string, baseURL string, modelName strin
 		strings.Contains(lowerModelName, "imagen")
 }
 
+func isGoogleGeminiAPIBaseURL(baseURL string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(baseURL)), "generativelanguage.googleapis.com")
+}
+
+func googleGeminiGenerateContentEndpoint(baseURL string, modelName string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	base = strings.TrimSuffix(base, "/openai")
+	if strings.Contains(base, ":generateContent") {
+		return base
+	}
+	if strings.Contains(strings.ToLower(base), "/models/") {
+		return base + ":generateContent"
+	}
+	return joinBaseURL(base, "models/"+modelName+":generateContent")
+}
+
 func googleImagenEndpoint(baseURL string, modelName string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.Contains(base, ":predict") {
@@ -1058,6 +1206,61 @@ func (provider *HTTPProvider) parseGoogleImagenImageFile(body []byte) (Generated
 		MimeType: mimeType,
 		Content:  content,
 	}, nil
+}
+
+func (provider *HTTPProvider) parseGoogleGeminiImageFile(body []byte) (GeneratedFile, error) {
+	var response struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					InlineData struct {
+						Data     string `json:"data"`
+						MimeType string `json:"mimeType"`
+					} `json:"inlineData"`
+					InlineDataSnake struct {
+						Data     string `json:"data"`
+						MimeType string `json:"mime_type"`
+					} `json:"inline_data"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return GeneratedFile{}, errors.Wrap(err, "decode google gemini image response")
+	}
+	if response.Error != nil {
+		return GeneratedFile{}, errors.Errorf("google gemini image api error: %s", response.Error.Message)
+	}
+	for _, candidate := range response.Candidates {
+		for _, part := range candidate.Content.Parts {
+			imageBytes := strings.TrimSpace(part.InlineData.Data)
+			mimeType := strings.TrimSpace(part.InlineData.MimeType)
+			if imageBytes == "" {
+				imageBytes = strings.TrimSpace(part.InlineDataSnake.Data)
+				mimeType = strings.TrimSpace(part.InlineDataSnake.MimeType)
+			}
+			if imageBytes == "" {
+				continue
+			}
+			content, err := base64.StdEncoding.DecodeString(imageBytes)
+			if err != nil {
+				return GeneratedFile{}, errors.Wrap(err, "decode google gemini image")
+			}
+			if mimeType == "" {
+				mimeType = "image/png"
+			}
+			return GeneratedFile{
+				Name:     "edited-image.png",
+				Kind:     "image",
+				MimeType: mimeType,
+				Content:  content,
+			}, nil
+		}
+	}
+	return GeneratedFile{}, errors.New("google gemini image model returned no image payload")
 }
 
 func (provider *HTTPProvider) parseDashScopeImageFile(body []byte) (GeneratedFile, error) {

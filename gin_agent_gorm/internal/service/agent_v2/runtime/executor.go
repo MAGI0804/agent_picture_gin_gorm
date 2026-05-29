@@ -320,9 +320,13 @@ func (executor *Executor) initialBudgetUsage(runID uint) (budgetUsage, error) {
 	if err != nil {
 		return budgetUsage{}, err
 	}
+	imageEdits, err := executor.repo.CountStepAttemptsByKey(runID, "image_edit_agent")
+	if err != nil {
+		return budgetUsage{}, err
+	}
 	return budgetUsage{
 		toolCalls:        toolCalls,
-		imageGenerations: imageGenerations,
+		imageGenerations: imageGenerations + imageEdits,
 	}, nil
 }
 
@@ -402,14 +406,18 @@ func (executor *Executor) consumeAttemptBudget(state domain.RunState, usage *bud
 	if state.Budget.MaxToolCalls > 0 && usage.toolCalls >= state.Budget.MaxToolCalls {
 		return errors.Errorf("tool call budget exceeded: attempted %d calls, max_tool_calls is %d", usage.toolCalls+1, state.Budget.MaxToolCalls)
 	}
-	if nodeKey == "image_generation_agent" && state.Budget.MaxImageGenerations > 0 && usage.imageGenerations >= state.Budget.MaxImageGenerations {
+	if isImageOutputNode(nodeKey) && state.Budget.MaxImageGenerations > 0 && usage.imageGenerations >= state.Budget.MaxImageGenerations {
 		return errors.Errorf("image generation budget exceeded: attempted %d generations, max_image_generations is %d", usage.imageGenerations+1, state.Budget.MaxImageGenerations)
 	}
 	usage.toolCalls++
-	if nodeKey == "image_generation_agent" {
+	if isImageOutputNode(nodeKey) {
 		usage.imageGenerations++
 	}
 	return nil
+}
+
+func isImageOutputNode(nodeKey string) bool {
+	return nodeKey == "image_generation_agent" || nodeKey == "image_edit_agent"
 }
 
 func (executor *Executor) ensureWithinTimeoutBudget(state domain.RunState, startedAt time.Time) error {
@@ -572,7 +580,7 @@ func applyStepResult(state domain.RunState, key string, result domain.StepResult
 		state.Prompts.Params = parseStringMap(result.Output["params"])
 	case "image_generation_agent":
 		state.GeneratedImages = parseGeneratedImages(result.Output["generated_images"])
-	case "artifact_agent", "poster_render_agent", "image_composition_agent", "refiner_agent":
+	case "artifact_agent", "poster_render_agent", "image_composition_agent", "image_edit_agent", "refiner_agent":
 		state.Artifacts = append(state.Artifacts, result.Artifacts...)
 	case "vision_review_agent", "ranker_agent":
 		if score, ok := result.Output["overall_score"].(float64); ok {

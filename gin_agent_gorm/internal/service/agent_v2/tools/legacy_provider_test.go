@@ -216,4 +216,7 @@ func TestLegacyProviderAdapterEditImageStoresEditedFilesWithSourceRefsInPrompt(t
 	if !strings.Contains(provider.generationRequest.Prompt, "objects/original.png") {
 		t.Fatalf("Prompt = %q, want source image reference", provider.generationRequest.Prompt)
 	}
+	if len(provider.generationRequest.ImageRefs) != 1 || provider.generationRequest.ImageRefs[0] != "objects/original.png" {
+		t.Fatalf("ImageRefs = %#v, want source image passed to provider", provider.generationRequest.ImageRefs)
+	}
 }

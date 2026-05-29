@@ -5,10 +5,16 @@ import (
 	"gin-biz-web-api/internal/service/agent_v2/tools"
 )
 
+// ImageGenerationArtifactStore is the persistence surface shared by AI edit and final bitmap composition.
+type ImageGenerationArtifactStore interface {
+	agents.ImageEditStore
+	agents.CompositionStore
+}
+
 // ImageGenerationWorkflowOptions wires the first real text-to-image workflow.
 type ImageGenerationWorkflowOptions struct {
 	Registry            *tools.Registry
-	ArtifactWriter      agents.CompositionStore
+	ArtifactWriter      ImageGenerationArtifactStore
 	TextModelConfigID   uint
 	ImageModelConfigID  uint
 	VisionModelConfigID uint
@@ -43,9 +49,16 @@ func MockImageGenerationWorkflow() Workflow {
 func ImageGenerationWorkflow(options ImageGenerationWorkflowOptions) Workflow {
 	return Sequential(
 		"image_generation_v2",
-		"0.4.0",
+		"0.7.0",
 		agents.NewIntentRouterAgent(),
-		agents.NewRequirementAgentWithText(options.Registry, options.TextModelConfigID),
+		agents.NewRequirementAgentWithRequiredText(options.Registry, options.TextModelConfigID),
+		agents.NewPromptAgentWithRequiredText(options.Registry, options.TextModelConfigID),
+		agents.NewImageEditAgent(options.Registry, options.ArtifactWriter, agents.ImageEditAgentOptions{
+			ImageModelConfigID: options.ImageModelConfigID,
+			CandidateCount:     options.CandidateCount,
+			ModelProvider:      options.ModelProvider,
+			ModelName:          options.ModelName,
+		}),
 		agents.NewImageCompositionAgent(options.ArtifactWriter),
 	)
 }
